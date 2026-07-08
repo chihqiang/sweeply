@@ -1,6 +1,6 @@
 [package]
 name = "sweeply"
-version = "0.1.0"
+version = "0.0.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -20,6 +20,31 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-os = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-
+# 系统信息（进程、磁盘、CPU、内存）
+sysinfo = "0.32"
+# 文件移至废纸篓（跨平台）
+trash = "5"
+# 目录递归遍历
+walkdir = "2"
+# 系统标准目录路径
+dirs = "6"
+# 文件通配符匹配
+glob = "0.3"
+# 异步 HTTP 客户端（网络测速）
+reqwest = { version = "0.12", features = ["json"] }
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+# 日期时间处理
+chrono = { version = "0.4", features = ["serde"] }
+# 日志输出
+log = "0.4"
+env_logger = "0.11"
+# plist 文件解析（读取 .app 的 Info.plist）
+plist = "1"
