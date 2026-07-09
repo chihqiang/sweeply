@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Monitor,
   Cpu,
@@ -104,32 +104,31 @@ export default function SystemInfoPage() {
   const [loading, setLoading] = useState<boolean>(cached === null);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hasCacheRef = useRef(cached !== null);
 
-  const fetchInfo = (isRefresh?: boolean) => {
-    if (isRefresh) setRefreshing(true);
-    getSystemInfo()
-      .then((data) => {
-        setInfo(data);
-        setError(null);
-        cacheSet(CACHE_KEY, data, CACHE_TTL);
-      })
-      .catch((e) => setError(String(e)))
-      .finally(() => {
-        setLoading(false);
-        setRefreshing(false);
-      });
-  };
+  const fetchInfo = useCallback(async () => {
+    try {
+      const data = await getSystemInfo();
+      setInfo(data);
+      setError(null);
+      cacheSet(CACHE_KEY, data, CACHE_TTL);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, []);
 
   // 首次挂载：仅当无缓存时才请求；有缓存则直接展示，仅启动定时刷新
   useEffect(() => {
-    if (!cached) {
-      fetchInfo();
+    if (!hasCacheRef.current) {
+      Promise.resolve().then(() => fetchInfo());
     }
     // 定时刷新（3 秒），保持实时性但不重新全量加载
-    const timer = setInterval(() => fetchInfo(), 3000);
+    const timer = setInterval(() => void fetchInfo(), 3000);
     return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [fetchInfo]);
 
   if (loading) {
     return <PageLoading label="加载系统信息..." />;
@@ -164,7 +163,7 @@ export default function SystemInfoPage() {
             </span>
           }
           actions={
-            <Button variant="outline" size="sm" onClick={() => fetchInfo(true)} disabled={refreshing} loading={refreshing}>
+            <Button variant="outline" size="sm" onClick={() => { setRefreshing(true); void fetchInfo(); }} disabled={refreshing} loading={refreshing}>
               <RefreshCw className="h-3.5 w-3.5" />
               {refreshing ? "刷新中" : "刷新"}
             </Button>

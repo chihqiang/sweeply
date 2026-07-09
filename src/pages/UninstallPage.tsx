@@ -24,7 +24,7 @@ export default function UninstallPage() {
   // 注意：不再在每次挂载时调用 scanApps()，由 hook 内部根据缓存决定是否需要请求
 
   useEffect(() => {
-    if (selectedApp && detailScrollRef.current) {
+    if (detailScrollRef.current) {
       detailScrollRef.current.scrollTo({ top: 0, behavior: "smooth" });
     }
   }, [selectedApp?.id]);

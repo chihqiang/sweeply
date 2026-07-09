@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 
 /**
  * 平滑进度 Hook
@@ -44,16 +44,15 @@ export function useSmoothProgress(
     if (target == null) {
       targetRef.current = 0;
       displayRef.current = 0;
-      setDisplay(0);
-      return;
+      const timer = setTimeout(() => setDisplay(0), 0);
+      return () => clearTimeout(timer);
     }
     targetRef.current = target;
     lastUpdateRef.current = performance.now();
-
-    // 目标为 1.0（完成）时直接跳到 1
     if (target >= 1) {
       displayRef.current = 1;
-      setDisplay(1);
+      const timer = setTimeout(() => setDisplay(1), 0);
+      return () => clearTimeout(timer);
     }
   }, [target]);
 
@@ -70,15 +69,12 @@ export function useSmoothProgress(
       let next = currentVal;
 
       if (targetVal >= 1 && currentVal >= 0.99) {
-        // 完成
         next = 1;
       } else if (currentVal < targetVal) {
-        // 还没到目标值，平滑追赶
         const diff = targetVal - currentVal;
         next = currentVal + Math.max(diff * 0.15, speed * 0.3);
         if (next > targetVal) next = targetVal;
       } else if (elapsed > trickleDelay) {
-        // 超过 trickleDelay 没有新事件，开始缓慢蠕动
         const ceiling = Math.min(targetVal + trickleCeiling, 0.95);
         if (currentVal < ceiling) {
           next = currentVal + trickleSpeed;
@@ -86,7 +82,6 @@ export function useSmoothProgress(
         }
       }
 
-      // 只有变化足够大才 setState，避免过多渲染
       if (Math.abs(next - currentVal) > 0.0005) {
         displayRef.current = next;
         setDisplay(next);
@@ -98,17 +93,6 @@ export function useSmoothProgress(
     rafRef.current = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafRef.current);
   }, [target, speed, trickleCeiling, trickleDelay, trickleSpeed]);
-
-  // 重置
-  const reset = useCallback(() => {
-    displayRef.current = 0;
-    targetRef.current = 0;
-    setDisplay(0);
-  }, []);
-
-  useEffect(() => {
-    if (target == null) reset();
-  }, [target, reset]);
 
   return display;
 }

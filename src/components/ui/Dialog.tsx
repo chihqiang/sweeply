@@ -18,22 +18,22 @@ export interface DialogProps {
 export function Dialog({ open, onClose, onConfirm, title, description, confirmLabel = "确认", cancelLabel = "取消", danger, loading, children }: DialogProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
-  const [closing, setClosing] = useState(false);
 
-  // 打开时延迟一帧触发过渡动画
+  // closing 是派生值：open 为 false 但 visible 仍为 true 时处于关闭动画中
+  const closing = !open && visible;
+
+  // 打开/关闭动画控制
   useEffect(() => {
     if (open) {
-      setVisible(true);
-      setClosing(false);
+      // 延迟一帧挂载以触发 CSS 过渡
+      const timer = setTimeout(() => setVisible(true), 0);
+      return () => clearTimeout(timer);
     } else if (visible) {
-      setClosing(true);
-      const timer = setTimeout(() => {
-        setVisible(false);
-        setClosing(false);
-      }, 200);
+      // 等 200ms 关闭动画结束后卸载
+      const timer = setTimeout(() => setVisible(false), 200);
       return () => clearTimeout(timer);
     }
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, visible]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (e.key === "Escape" && !loading) onClose();

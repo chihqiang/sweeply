@@ -104,23 +104,23 @@ export function useUninstall(): UseUninstallReturn {
     }
   });
 
+  const { execute: listExecute } = listTask;
+
   /** 手动刷新：强制重新扫描（删除缓存 → 清空列表 → 重新获取） */
   const scanApps = useCallback(async () => {
     cacheDelete(CACHE_KEY_APPS);
     setLoading(true);
     setScanProgress(null);
     setAppList([]);
-    await listTask.execute();
-  }, [listTask.execute]); // eslint-disable-line react-hooks/exhaustive-deps
+    await listExecute();
+  }, [listExecute]);
 
   // 首次挂载：仅当无缓存数据时才请求
   useEffect(() => {
     if (appList.length === 0) {
-      listTask.execute();
-    } else {
-      setLoading(false);
+      void listExecute();
     }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [listExecute, appList.length]);
 
   const scanTask = useAsyncTask(async (appId: string) => {
     const app = await scanAppFiles(appId, AppScanType.Uninstall);
@@ -140,18 +140,20 @@ export function useUninstall(): UseUninstallReturn {
     }
   });
 
+  const { execute: scanExecute } = scanTask;
   const scanFiles = useCallback(
     async (appId: string) => {
-      await scanTask.execute(appId);
+      await scanExecute(appId);
     },
-    [scanTask.execute], // eslint-disable-line react-hooks/exhaustive-deps
+    [scanExecute],
   );
 
+  const { execute: uninstallExecute } = uninstallTask;
   const executeUninstall = useCallback(
     async (appId: string, selectedFileIds: string[]) => {
-      await uninstallTask.execute({ appId, selectedFileIds });
+      await uninstallExecute({ appId, selectedFileIds });
     },
-    [uninstallTask.execute], // eslint-disable-line react-hooks/exhaustive-deps
+    [uninstallExecute],
   );
 
   const selectApp = useCallback((app: InstalledApp | null) => {
@@ -188,17 +190,21 @@ export function useUninstall(): UseUninstallReturn {
     });
   }, []);
 
+  const { reset: listReset } = listTask;
+  const { reset: scanReset } = scanTask;
+  const { reset: uninstallReset } = uninstallTask;
+
   const reset = useCallback(() => {
-    listTask.reset();
-    scanTask.reset();
-    uninstallTask.reset();
+    listReset();
+    scanReset();
+    uninstallReset();
     cacheDelete(CACHE_KEY_APPS);
     setAppList([]);
     setSelectedApp(null);
     setUninstallProgress(null);
     setScanProgress(null);
     setLoading(false);
-  }, [listTask.reset, scanTask.reset, uninstallTask.reset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [listReset, scanReset, uninstallReset]);
 
   const status =
     listTask.status === TaskStatus.Processing || scanTask.status === TaskStatus.Processing

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useToast, Button, EmptyState, Dialog, PageContainer, PageHeader, PageLoading, ErrorAlert } from "@/components/ui";
 import { listLoginItems, addLoginItem, removeLoginItem, listBackgroundItems } from "@/services/loginItemService";
 import type { LoginItem, BackgroundItem } from "@/types/loginItems";
@@ -24,19 +24,19 @@ export default function LoginItemsPage() {
   const [removing, setRemoving] = useState<string | null>(null);
   const [removingTarget, setRemovingTarget] = useState<LoginItem | null>(null);
   const { addToast } = useToast();
+  const hasCacheRef = useRef(cached !== null);
 
   const fetchItems = useCallback(async (force: boolean = false) => {
     // 非强制刷新时，如果已有缓存数据则直接使用
     if (!force && (items.length > 0 || bgItems.length > 0)) {
       return;
     }
-    setLoading(true);
-    setError(null);
     try {
       const [loginResult, bgResult] = await Promise.all([
         listLoginItems(),
         listBackgroundItems(),
       ]);
+      setError(null);
       setItems(loginResult);
       setBgItems(bgResult);
       cacheSet(CACHE_KEY, { items: loginResult, bgItems: bgResult }, CACHE_TTL);
@@ -49,11 +49,10 @@ export default function LoginItemsPage() {
 
   // 首次挂载：仅当无缓存时才请求
   useEffect(() => {
-    if (cached === null) {
-      void fetchItems(true);
+    if (!hasCacheRef.current) {
+      Promise.resolve().then(() => fetchItems(true));
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [fetchItems]);
 
   const handleAdd = useCallback(async () => {
     try {
@@ -69,6 +68,7 @@ export default function LoginItemsPage() {
         addToast({ type: "success", message: "已添加到启动项" });
         // 添加后强制刷新
         cacheDelete(CACHE_KEY);
+        setLoading(true);
         void fetchItems(true);
       }
     } catch (e) {
@@ -98,6 +98,7 @@ export default function LoginItemsPage() {
   }, [removingTarget, addToast, bgItems]);
 
   const handleRefresh = useCallback(() => {
+    setLoading(true);
     void fetchItems(true);
   }, [fetchItems]);
 

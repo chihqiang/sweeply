@@ -36,11 +36,12 @@ export function useNetworkSpeed(): UseNetworkSpeedReturn {
   const [networkStatus, setNetworkStatus] = useState<NetworkStatus | null>(cached ?? null);
   const [progress, setProgress] = useState<SpeedTestProgressEvent | null>(null);
   const mountedRef = useRef(true);
+  const hasCacheRef = useRef(cached !== null);
 
   useEffect(() => {
     mountedRef.current = true;
     // 仅当无缓存时才请求
-    if (!cached) {
+    if (!hasCacheRef.current) {
       getNetworkStatus().then((result) => {
         if (mountedRef.current) {
           setNetworkStatus(result);
@@ -49,7 +50,6 @@ export function useNetworkSpeed(): UseNetworkSpeedReturn {
       }).catch(() => {});
     }
     return () => { mountedRef.current = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const refreshStatus = useCallback(async () => {
@@ -72,19 +72,21 @@ export function useNetworkSpeed(): UseNetworkSpeedReturn {
     }
   });
 
+  const { execute: testExecute } = testTask;
   const startTest = useCallback(async () => {
-    await testTask.execute();
-  }, [testTask.execute]); // eslint-disable-line react-hooks/exhaustive-deps
+    await testExecute();
+  }, [testExecute]);
 
+  const { reset: testReset } = testTask;
   const stopTest = useCallback(async () => {
     await stopSpeedTest();
-    testTask.reset();
-  }, [testTask.reset]); // eslint-disable-line react-hooks/exhaustive-deps
+    testReset();
+  }, [testReset]);
 
   const reset = useCallback(() => {
-    testTask.reset();
+    testReset();
     setProgress(null);
-  }, [testTask.reset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [testReset]);
 
   const status =
     testTask.status === TaskStatus.Processing ? TaskStatus.Processing

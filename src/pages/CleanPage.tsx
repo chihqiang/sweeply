@@ -352,7 +352,8 @@ export default function CleanPage() {
     }
     if (!isScanning) {
       scanStartTimeRef.current = 0;
-      setEta("");
+      const timer = setTimeout(() => setEta(""), 0);
+      return () => clearTimeout(timer);
     }
   }, [isScanning]);
 
@@ -543,29 +544,6 @@ export default function CleanPage() {
 
   // 清理成功后自动重新扫描
   const prevCleanResultRef = useRef(cleanResult);
-  useEffect(() => {
-    if (cleanResult && cleanResult !== prevCleanResultRef.current) {
-      prevCleanResultRef.current = cleanResult;
-      const timer = setTimeout(() => {
-        void handleScan();
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
-    prevCleanResultRef.current = cleanResult;
-  }, [cleanResult]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const handleClean = useCallback(async () => {
-    setConfirmOpen(false);
-    try {
-      await executeCleanAction(selectedIds, sizes);
-      addToast({
-        type: "success",
-        message: `已释放 ${formatFileSize(totalSelected)}，清理 ${selectedIds.length} 个文件`,
-      });
-    } catch {
-      addToast({ type: "error", message: "清理失败" });
-    }
-  }, [selectedIds, sizes, executeCleanAction, totalSelected, addToast]);
 
   const handleScan = useCallback(async () => {
     try {
@@ -586,6 +564,30 @@ export default function CleanPage() {
       addToast({ type: "error", message: "扫描失败" });
     }
   }, [startScan, addToast]);
+
+  useEffect(() => {
+    if (cleanResult && cleanResult !== prevCleanResultRef.current) {
+      prevCleanResultRef.current = cleanResult;
+      const timer = setTimeout(() => {
+        void handleScan();
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+    prevCleanResultRef.current = cleanResult;
+  }, [cleanResult, handleScan]);
+
+  const handleClean = useCallback(async () => {
+    setConfirmOpen(false);
+    try {
+      await executeCleanAction(selectedIds, sizes);
+      addToast({
+        type: "success",
+        message: `已释放 ${formatFileSize(totalSelected)}，清理 ${selectedIds.length} 个文件`,
+      });
+    } catch {
+      addToast({ type: "error", message: "清理失败" });
+    }
+  }, [selectedIds, sizes, executeCleanAction, totalSelected, addToast]);
 
   const smoothProgress = useSmoothProgress(
     (isScanning || isProcessing) ? (scanProgress?.progress ?? 0) : null,
@@ -648,10 +650,7 @@ export default function CleanPage() {
           </span>
         }
         centerLabel={isProcessing ? "清理中" : "扫描中"}
-        description={
-          scanProgress?.description ||
-          (isProcessing ? "正在清理..." : "正在扫描...")
-        }
+        description={isProcessing ? "正在清理..." : "正在扫描..."}
         detail={
           scanProgress?.description && smoothProgress > 0 && smoothProgress < 1
             ? scanProgress.description

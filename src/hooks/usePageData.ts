@@ -48,34 +48,14 @@ export function usePageData<T>(
     };
   }, []);
 
-  // 首次挂载：如果缓存有效则不请求
-  useEffect(() => {
-    if (cacheHas(key)) {
-      const cachedData = cacheGet<T>(key);
-      if (cachedData !== null) {
-        setData(cachedData);
-        setLoading(false);
-        setLastFetch(cacheTimestamp(key));
-        return;
-      }
-    }
-    // 无缓存，执行请求
-    void doFetch(false);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key]);
-
   const doFetch = useCallback(
-    async (force: boolean) => {
+    async () => {
       if (fetchingRef.current) return;
       fetchingRef.current = true;
 
-      if (force) {
-        setLoading(true);
-      }
-      setError(null);
-
       try {
         const result = await fetcher();
+        setError(null);
         cacheSet(key, result, ttl);
         if (mountedRef.current) {
           setData(result);
@@ -91,12 +71,19 @@ export function usePageData<T>(
         fetchingRef.current = false;
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [key, ttl],
+    [key, ttl, fetcher],
   );
 
+  // 首次挂载：仅当无缓存时才请求（缓存已在 useState 初始化中加载）
+  useEffect(() => {
+    if (!cacheHas(key)) {
+      Promise.resolve().then(() => doFetch());
+    }
+  }, [key, doFetch]);
+
   const refresh = useCallback(async () => {
-    await doFetch(true);
+    setLoading(true);
+    await doFetch();
   }, [doFetch]);
 
   return { data, loading, error, refresh, lastFetch };

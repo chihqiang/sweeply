@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { openKeychainAccess as openKeychain, listKeychains, searchKeychainItems } from "@/services/keychainService";
 import { useAsyncTask } from "./useAsyncTask";
 import { cacheGet, cacheSet } from "@/utils/cache";
@@ -51,24 +51,26 @@ export function useKeychain(): UseKeychainReturn {
     await openKeychain();
   }, []);
 
+  const { execute: loadExecute } = loadTask;
   const load = useCallback(async () => {
-    await loadTask.execute();
-  }, [loadTask.execute]);
+    await loadExecute();
+  }, [loadExecute]);
 
+  const { execute: searchExecute } = searchTask;
   const search = useCallback(
     async (q: string) => {
-      await searchTask.execute(q);
+      await searchExecute(q);
     },
-    [searchTask.execute],
+    [searchExecute],
   );
 
   // 首次挂载：仅当无缓存时才请求
+  const hasCacheRef = useRef(cached !== null);
   useEffect(() => {
-    if (!cached) {
-      void loadTask.execute();
+    if (!hasCacheRef.current) {
+      void loadExecute();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [loadExecute]);
 
   const status =
     loadTask.status === "processing"

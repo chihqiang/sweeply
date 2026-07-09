@@ -120,17 +120,19 @@ export function useClean(): UseCleanReturn {
     }
   });
 
+  const { execute: scanExecute } = scan;
   const startScan = useCallback(async () => {
     cacheDelete(CACHE_KEY_CLEAN);
     setScanSummary(null);
-    await scan.execute();
-  }, [scan.execute]); // eslint-disable-line react-hooks/exhaustive-deps
+    await scanExecute();
+  }, [scanExecute]);
 
+  const { execute: cleanExecute } = clean;
   const executeCleanAction = useCallback(
     async (selectedIds: string[], sizes: number[]) => {
-      await clean.execute(selectedIds, sizes);
+      await cleanExecute(selectedIds, sizes);
     },
-    [clean.execute], // eslint-disable-line react-hooks/exhaustive-deps
+    [cleanExecute],
   );
 
   const toggleItemSelection = useCallback((itemId: string) => {
@@ -235,19 +237,21 @@ export function useClean(): UseCleanReturn {
     });
   }, []);
 
+  const { reset: scanReset } = scan;
   const stopScan = useCallback(async () => {
     await stopCleanScan();
-    scan.reset();
+    scanReset();
     setScanProgress(null);
-  }, [scan.reset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scanReset]);
 
+  const { reset: cleanReset } = clean;
   const reset = useCallback(() => {
-    scan.reset();
-    clean.reset();
+    scanReset();
+    cleanReset();
     setScanSummary(null);
     setScanProgress(null);
     cacheDelete(CACHE_KEY_CLEAN);
-  }, [scan.reset, clean.reset]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [scanReset, cleanReset]);
 
   const status =
     scan.status === TaskStatus.Processing ? TaskStatus.Scanning
