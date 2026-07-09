@@ -4,3 +4,4 @@
 pub mod clean;
 pub mod uninstall;
 pub mod network;
+pub mod keychain;

@@ -1,15 +1,3 @@
-/**
- * 应用卸载相关类型定义
- * 参考 lemon-cleaner 的 LMLocalApp / LMFileItem / LMFileGroup 模型
- * 枚举值与 Rust 端 #[serde(rename_all = "lowercase")] 序列化结果一致
- */
-
-import type { SelectionState } from "./common";
-
-/** 文件类型（卸载残留分类）
- *  参考 lemon-cleaner 的 LMFileType 枚举
- *  Rust 端使用 #[serde(rename_all = "lowercase")] 序列化
- */
 export enum UninstallFileType {
   /** 应用本体 */
   Bundle = "bundle",
@@ -45,10 +33,6 @@ export enum UninstallFileType {
   Other = "other",
 }
 
-/** 卸载扫描类型
- *  参考 lemon-cleaner 的 AppScanType
- *  Rust 端使用 #[serde(rename_all = "lowercase")] 序列化
- */
 export enum AppScanType {
   /** 卸载残留扫描 */
   Leftover = "leftover",
@@ -56,9 +40,6 @@ export enum AppScanType {
   Uninstall = "uninstall",
 }
 
-/** 应用文件项
- *  参考 lemon-cleaner 的 LMFileItem
- */
 export interface AppFileItem {
   /** 唯一标识 */
   id: string;
@@ -76,9 +57,6 @@ export interface AppFileItem {
   isDeleted: boolean;
 }
 
-/** 应用文件分组
- *  参考 lemon-cleaner 的 LMFileGroup
- */
 export interface AppFileGroup {
   /** 文件类型 */
   fileType: UninstallFileType;
@@ -91,12 +69,9 @@ export interface AppFileGroup {
   /** 已选大小（字节） */
   selectedSize: number;
   /** 选中状态 */
-  selectionState: SelectionState;
+  selectionState: string;
 }
 
-/** 已安装应用信息
- *  参考 lemon-cleaner 的 LMLocalApp
- */
 export interface InstalledApp {
   /** 唯一标识 */
   id: string;
@@ -132,7 +107,6 @@ export interface InstalledApp {
   isScanComplete: boolean;
 }
 
-/** 卸载进度事件 */
 export interface UninstallProgressEvent {
   /** 应用 ID */
   appId: string;
@@ -144,7 +118,6 @@ export interface UninstallProgressEvent {
   isFinished: boolean;
 }
 
-/** 卸载结果 */
 export interface UninstallResult {
   /** 应用 ID */
   appId: string;

@@ -5,6 +5,16 @@
  */
 use serde::{Deserialize, Serialize};
 
+/// 测速进度事件载荷
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpeedTestProgressPayload {
+    pub phase: SpeedTestPhase,
+    pub progress: f64,
+    pub current_speed: u64,
+    pub direction: SpeedDirection,
+}
+
 /// 网络连接状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -44,16 +54,6 @@ pub struct SpeedTestResult {
     pub timestamp: u64,
 }
 
-/// 测速进度事件
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SpeedTestProgressEvent {
-    pub phase: SpeedTestPhase,
-    pub progress: f64,
-    pub current_speed: u64,
-    pub direction: SpeedDirection,
-}
-
 /// 网络接口信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,14 +74,3 @@ pub struct NetworkStatus {
     pub current_upload_speed: u64,
 }
 
-/// 进程网络使用信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProcessNetworkUsage {
-    pub pid: u32,
-    pub app_name: String,
-    pub download_speed: u64,
-    pub upload_speed: u64,
-    pub total_download: u64,
-    pub total_upload: u64,
-}

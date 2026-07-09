@@ -8,9 +8,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "sweeply_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
@@ -38,9 +35,11 @@ dirs = "6"
 # 文件通配符匹配
 glob = "0.3"
 # 异步 HTTP 客户端（网络测速）
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+# 异步流工具（上传流式 body）
+futures-util = "0.3"
 # 异步运行时
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["rt", "macros", "time"] }
 # 日期时间处理
 chrono = { version = "0.4", features = ["serde"] }
 # 日志输出
@@ -48,3 +47,17 @@ log = "0.4"
 env_logger = "0.11"
 # plist 文件解析（读取 .app 的 Info.plist）
 plist = "1"
+# .icns 图标文件解析（提取 macOS 应用图标）
+icns = "0.3"
+# base64 编码（图标数据转 base64）
+base64 = "0.22"
+# PNG 编码（将 icns 像素数据编码为 PNG）
+png = "0.17"
+# SHA-256 哈希（重复文件检测）
+sha2 = "0.10"
+
+[profile.release]
+panic = "abort"
+lto = true
+codegen-units = 1
+strip = true

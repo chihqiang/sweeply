@@ -6,6 +6,16 @@
  */
 use serde::{Deserialize, Serialize};
 
+/// 卸载进度事件载荷
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UninstallProgressPayload {
+    pub app_id: String,
+    pub deleted_count: u64,
+    pub total_count: u64,
+    pub is_finished: bool,
+}
+
 /// 文件类型（卸载残留分类）
 /// 参考 lemon-cleaner 的 LMFileType 枚举
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -86,16 +96,6 @@ pub struct InstalledApp {
     pub selected_count: u64,
     pub file_groups: Vec<AppFileGroup>,
     pub is_scan_complete: bool,
-}
-
-/// 卸载进度事件
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UninstallProgressEvent {
-    pub app_id: String,
-    pub deleted_count: u64,
-    pub total_count: u64,
-    pub is_finished: bool,
 }
 
 /// 卸载结果

@@ -1,339 +1,286 @@
-/**
- * 应用卸载页面
- */
-import { useMemo, useState, useEffect } from "react";
+import { useMemo, useState, useEffect, useCallback, useRef } from "react";
 import { useUninstall } from "@/hooks/useUninstall";
-import {
-  Button,
-  Card,
-  ProgressBar,
-  EmptyState,
-} from "@/components/ui";
+import { useDebounce } from "@/hooks/useDebounce";
+import { Button, ProgressBar, EmptyState, Dialog, useToast, Skeleton, PageContainer, PageHeader, ErrorAlert, SearchInput, SortSelect } from "@/components/ui";
 import { formatFileSize } from "@/utils/format";
 import { TaskStatus } from "@/types/common";
-import { UninstallFileType } from "@/types/uninstaller";
-import {
-  AppWindow,
-  Search,
-  Trash2,
-  CheckCircle2,
-  AlertCircle,
-  RefreshCw,
-  ChevronRight,
-} from "lucide-react";
+import { AppWindow, Trash2, RefreshCw, CheckCircle2, ChevronLeft, FileWarning } from "lucide-react";
+import { AppIconTile } from "./AppIconTile";
+import { AppFileGroupCard } from "./AppFileGroupCard";
+import type { InstalledApp } from "@/types/uninstaller";
+import { cn } from "@/utils/cn";
 
-/** 页面标题 */
-const PAGE_TITLE = "应用卸载";
-const PAGE_DESCRIPTION = "彻底卸载应用及其残留文件，释放磁盘空间";
+type SortBy = "name" | "size-desc" | "last-used";
 
-/** 文件类型显示名称映射 */
-const FILE_TYPE_LABELS: Record<UninstallFileType, string> = {
-  [UninstallFileType.Bundle]: "应用本体",
-  [UninstallFileType.Support]: "支持文件",
-  [UninstallFileType.Cache]: "缓存",
-  [UninstallFileType.Preference]: "偏好设置",
-  [UninstallFileType.State]: "状态文件",
-  [UninstallFileType.Reporter]: "报告文件",
-  [UninstallFileType.Log]: "日志",
-  [UninstallFileType.Sandbox]: "沙盒数据",
-  [UninstallFileType.Daemon]: "守护进程",
-  [UninstallFileType.LoginItem]: "登录项",
-  [UninstallFileType.KextWithBundleId]: "内核扩展",
-  [UninstallFileType.KextWithPath]: "内核扩展",
-  [UninstallFileType.Signal]: "信号文件",
-  [UninstallFileType.FileSystem]: "文件系统",
-  [UninstallFileType.PreferencePane]: "偏好面板",
-  [UninstallFileType.Other]: "其他",
-};
-
-/** 应用卸载页面组件 */
 export default function UninstallPage() {
-  const {
-    appList,
-    selectedApp,
-    uninstallResult,
-    status,
-    uninstallProgress,
-    error,
-    scanApps,
-    scanFiles,
-    executeUninstall,
-    selectApp,
-  } = useUninstall();
+  const { appList, selectedApp, uninstallResult, status, loading, uninstallProgress, error, scanApps, scanFiles, executeUninstall, selectApp, toggleFileSelection, toggleGroupSelection } = useUninstall();
+  const { addToast } = useToast();
+  const [query, setQuery] = useState("");
+  const [sortBy, setSortBy] = useState<SortBy>("name");
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const debouncedQuery = useDebounce(query, 250);
+  const detailScrollRef = useRef<HTMLDivElement>(null);
 
-  const [searchQuery, setSearchQuery] = useState("");
+  // 注意：不再在每次挂载时调用 scanApps()，由 hook 内部根据缓存决定是否需要请求
 
-  // 页面加载时自动扫描应用列表
   useEffect(() => {
-    void scanApps();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (selectedApp && detailScrollRef.current) {
+      detailScrollRef.current.scrollTo({ top: 0, behavior: "smooth" });
+    }
+  }, [selectedApp?.id]);
 
-  const isScanning = status === TaskStatus.Scanning;
-  const isProcessing = status === TaskStatus.Processing;
+  const processing = status === TaskStatus.Processing;
+  const showDetail = selectedApp !== null;
 
-  /** 过滤后的应用列表 */
-  const filteredApps = useMemo(() => {
-    if (!searchQuery.trim()) return appList;
-    const query = searchQuery.toLowerCase();
-    return appList.filter(
-      (app) =>
-        app.appName.toLowerCase().includes(query) ||
-        app.bundleId.toLowerCase().includes(query),
-    );
-  }, [appList, searchQuery]);
+  // #19: 排序 + 搜索
+  const filtered = useMemo(() => {
+    let result = appList;
+    if (debouncedQuery.trim()) {
+      const q = debouncedQuery.toLowerCase();
+      result = result.filter((a) => a.appName.toLowerCase().includes(q) || a.bundleId.toLowerCase().includes(q));
+    }
+    const sorted = [...result];
+    if (sortBy === "name") {
+      sorted.sort((a, b) => (a.showName || a.appName).localeCompare(b.showName || b.appName, "zh-CN"));
+    } else if (sortBy === "size-desc") {
+      sorted.sort((a, b) => (b.bundleSize || 0) - (a.bundleSize || 0));
+    } else if (sortBy === "last-used") {
+      sorted.sort((a, b) => (b.lastUsedDate || 0) - (a.lastUsedDate || 0));
+    }
+    return sorted;
+  }, [appList, debouncedQuery, sortBy]);
 
-  /** 选中的文件 ID 列表（空值保护） */
-  const selectedFileIds = useMemo(() => {
-    if (!selectedApp?.fileGroups) return [];
-    return selectedApp.fileGroups
-      .flatMap((g) => g.files)
-      .filter((f) => f.selected)
-      .map((f) => f.id);
+  const fileCount = useMemo(() => {
+    if (!selectedApp?.fileGroups) return 0;
+    return selectedApp.fileGroups.reduce((s, g) => s + g.files.length, 0);
   }, [selectedApp]);
 
-  /** 处理应用点击 */
-  const handleAppClick = (app: typeof appList[number]) => {
+  // #20: 计算实际选中文件大小
+  const selectedFileSize = useMemo(() => {
+    if (!selectedApp?.fileGroups) return 0;
+    return selectedApp.fileGroups.reduce((s, g) => s + g.selectedSize, 0);
+  }, [selectedApp]);
+
+  const selectedFileCount = useMemo(() => {
+    if (!selectedApp?.fileGroups) return 0;
+    return selectedApp.fileGroups.reduce((s, g) => s + g.selectedCount, 0);
+  }, [selectedApp]);
+
+  const handleClick = useCallback((app: InstalledApp) => {
     selectApp(app);
-    void scanFiles(app.id);
-  };
+    scanFiles(app.id);
+  }, [selectApp, scanFiles]);
+
+  const handleUninstall = useCallback(async () => {
+    if (!selectedApp) return;
+    setConfirmOpen(false);
+    try {
+      const ids = selectedApp.fileGroups?.flatMap((g) => g.files).filter((f) => f.selected).map((f) => f.id) ?? [];
+      await executeUninstall(selectedApp.id, ids);
+      addToast({ type: "success", message: `已卸载 ${selectedApp.showName || selectedApp.appName}` });
+    } catch { addToast({ type: "error", message: "卸载失败" }); }
+  }, [selectedApp, executeUninstall, addToast]);
+
+  const handleRefresh = useCallback(() => { scanApps(); }, [scanApps]);
+  const handleClose = useCallback(() => selectApp(null), [selectApp]);
 
   return (
-    <div className="flex h-full flex-col p-6">
-      {/* 页头 */}
-      <div className="mb-6">
-        <div className="flex items-center gap-2">
-          <AppWindow className="h-6 w-6 text-blue-500" />
-          <h1 className="text-xl font-bold text-gray-800 dark:text-gray-100">
-            {PAGE_TITLE}
-          </h1>
-        </div>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-          {PAGE_DESCRIPTION}
-        </p>
+    <PageContainer>
+      <PageHeader
+        title="应用卸载"
+        description="彻底卸载应用及其残留文件"
+        actions={
+          <Button variant="outline" size="sm" onClick={handleRefresh} loading={loading}>
+            <RefreshCw className="h-3.5 w-3.5" />
+            刷新
+          </Button>
+        }
+      />
+
+      {/* Search + Sort */}
+      <div className="mb-5 flex items-center gap-3">
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          placeholder="搜索应用..."
+          maxWidthClass="max-w-md"
+          searching={query !== debouncedQuery && query.trim() !== ""}
+        />
+        <SortSelect
+          value={sortBy}
+          onChange={(v) => setSortBy(v as SortBy)}
+          options={[
+            { value: "name", label: "按名称" },
+            { value: "size-desc", label: "按大小" },
+            { value: "last-used", label: "按使用时间" },
+          ]}
+        />
       </div>
 
-      {/* 错误提示 */}
-      {error && (
-        <Card className="mb-4 border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-900/20">
-          <div className="flex items-center gap-2 text-red-600 dark:text-red-400">
-            <AlertCircle className="h-5 w-5" />
-            <span className="text-sm">{error}</span>
-          </div>
-        </Card>
-      )}
+      {/* App count */}
+      <div className="mb-4 flex items-center gap-2">
+        <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
+          {loading ? "加载中..." : `${filtered.length} 个应用`}
+        </span>
+      </div>
 
-      {/* 卸载结果 */}
-      {uninstallResult && (
-        <Card className="mb-4 border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-900/20">
-          <div className="flex items-center gap-2 text-green-600 dark:text-green-400">
-            <CheckCircle2 className="h-5 w-5" />
-            <span className="text-sm font-medium">
-              卸载完成：已释放 {formatFileSize(uninstallResult.freedSize)}，
-              删除 {uninstallResult.deletedFileCount} 个文件
-              {uninstallResult.failedFileCount > 0 &&
-                `，${uninstallResult.failedFileCount} 个失败`}
-            </span>
-          </div>
-        </Card>
-      )}
-
-      {/* 卸载进度 */}
-      {isProcessing && uninstallProgress && (
-        <Card className="mb-4">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-gray-600 dark:text-gray-300">
-              正在卸载... ({uninstallProgress.deletedCount}/
-              {uninstallProgress.totalCount})
-            </span>
-          </div>
-          <ProgressBar
-            value={
-              uninstallProgress.totalCount > 0
-                ? uninstallProgress.deletedCount /
-                  uninstallProgress.totalCount
-                : 0
-            }
-            className="mt-2"
-            showLabel
-          />
-        </Card>
-      )}
-
-      <div className="flex flex-1 gap-4 overflow-hidden">
-        {/* 左侧：应用列表 */}
-        <div className="flex w-1/2 flex-col">
-          {/* 搜索框 */}
-          <div className="mb-3 flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="搜索应用..."
-                className="h-9 w-full rounded-lg border border-gray-300 bg-white pl-9 pr-3 text-sm text-gray-700 placeholder-gray-400 focus:border-blue-400 focus:outline-none dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200"
-              />
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void scanApps()}
-              loading={isScanning}
-            >
-              <RefreshCw className="h-4 w-4" />
-              刷新
-            </Button>
-          </div>
-
-          {/* 应用列表 */}
-          <div className="flex-1 overflow-y-auto space-y-1">
-            {filteredApps.length === 0 && !isScanning && (
-              <EmptyState
-                icon={AppWindow}
-                title="未找到应用"
-                description={searchQuery ? "尝试更换搜索关键词" : "点击「刷新」按钮扫描已安装应用"}
-              />
-            )}
-            {filteredApps.map((app) => (
-              <button
-                key={app.id}
-                onClick={() => handleAppClick(app)}
-                className={[
-                  "flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors",
-                  selectedApp?.id === app.id
-                    ? "border-blue-400 bg-blue-50 dark:border-blue-600 dark:bg-blue-900/20"
-                    : "border-transparent hover:bg-gray-100 dark:hover:bg-gray-700/50",
-                ].join(" ")}
-              >
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gray-200 dark:bg-gray-700">
-                  {app.iconPath ? (
-                    <img
-                      src={app.iconPath}
-                      alt={app.appName}
-                      className="h-8 w-8 rounded"
-                    />
-                  ) : (
-                    <AppWindow className="h-5 w-5 text-gray-400" />
-                  )}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-gray-800 dark:text-gray-100">
-                    {app.showName || app.appName || "未知应用"}
-                  </p>
-                  <p className="truncate text-xs text-gray-400">
-                    {app.version || "未知版本"} · {formatFileSize(app.bundleSize || 0)}
-                  </p>
-                </div>
-                <ChevronRight className="h-4 w-4 text-gray-300" />
-              </button>
+      {/* Grid */}
+      <div className="min-h-0 flex-1 overflow-y-auto pb-4">
+        {loading && filtered.length === 0 && (
+          <div className="grid grid-cols-4 gap-3 sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10">
+            {[1,2,3,4,5,6,7,8,9,10].map((i) => (
+              <div key={i} className="flex flex-col items-center gap-2 p-3">
+                <Skeleton variant="rect" width={64} height={64} className="rounded-2xl" />
+                <Skeleton variant="text" width={48} height={10} />
+              </div>
             ))}
           </div>
-        </div>
+        )}
+        {!loading && filtered.length === 0 && (
+          <EmptyState icon={AppWindow} title="未找到应用" description={query ? "更换搜索关键词" : "点击刷新按钮扫描"} />
+        )}
+        {filtered.length > 0 && (
+          <div className="grid grid-cols-4 gap-1 sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10">
+            {filtered.map((app, idx) => (
+              <div
+                key={app.id}
+                className="min-w-0 animate-fade-in-up"
+                style={{ animationDelay: `${Math.min(idx * 20, 400)}ms`, animationFillMode: "backwards" }}
+              >
+                <AppIconTile app={app} selected={false} onClick={handleClick} />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
-        {/* 右侧：应用详情 / 残留文件 */}
-        <div className="flex w-1/2 flex-col">
-          {!selectedApp ? (
-            <EmptyState
-              icon={AppWindow}
-              title="选择一个应用"
-              description="从左侧列表选择应用以查看残留文件"
-              className="flex-1"
-            />
-          ) : (
-            <>
-              {/* 应用信息 */}
-              <Card className="mb-3">
-                <div className="flex items-center gap-3">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-gray-200 dark:bg-gray-700">
-                    {selectedApp.iconPath ? (
-                      <img
-                        src={selectedApp.iconPath}
-                        alt={selectedApp.appName}
-                        className="h-10 w-10 rounded"
-                      />
-                    ) : (
-                      <AppWindow className="h-6 w-6 text-gray-400" />
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    <p className="font-semibold text-gray-800 dark:text-gray-100">
-                      {selectedApp.showName || selectedApp.appName || "未知应用"}
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      {selectedApp.version || "未知版本"} · {formatFileSize(selectedApp.totalSize || 0)}
-                    </p>
-                  </div>
-                  <Button
-                    variant="danger"
-                    size="sm"
-                    loading={isProcessing}
-                    disabled={selectedFileIds.length === 0}
-                    onClick={() =>
-                      void executeUninstall(
-                        selectedApp.id,
-                        selectedFileIds,
-                      )
-                    }
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    卸载 ({selectedFileIds.length})
-                  </Button>
+      {/* ════════════════════════════════════════════════════════════════
+          侧滑面板 (Slide-in Panel)
+          常规清理工具的交互模式：从右侧滑入，不遮挡应用列表
+      ════════════════════════════════════════════════════════════════ */}
+      {showDetail && (
+        <>
+          {/* 遮罩层 */}
+          <div
+            className="fixed inset-0 z-[9997] bg-black/20 backdrop-blur-sm animate-fade-in"
+            onClick={handleClose}
+          />
+
+          {/* 侧滑面板 */}
+          <div
+            className={cn(
+              "fixed right-0 top-0 z-[9998] flex h-full w-full max-w-xl flex-col",
+              "bg-white shadow-2xl dark:bg-gray-800",
+              "animate-slide-in-right",
+            )}
+            style={{ animationDuration: "0.3s" }}
+          >
+            {/* Error / Result / Progress */}
+            <div className="shrink-0 space-y-3 border-b border-gray-100 px-6 pt-6 pb-4 dark:border-gray-700/30">
+              {error && <ErrorAlert message={error} />}
+              {uninstallResult && (
+                <div className="flex items-center gap-2.5 rounded-xl border border-green-200/60 bg-green-50/80 px-4 py-3 text-sm text-green-700 dark:border-green-800/60 dark:bg-green-900/20 dark:text-green-400 animate-fade-in">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  <span>已释放 {formatFileSize(uninstallResult.freedSize)}，删除 {uninstallResult.deletedFileCount} 个文件{uninstallResult.failedFileCount > 0 && `，${uninstallResult.failedFileCount} 个失败`}</span>
                 </div>
-              </Card>
+              )}
+              {processing && uninstallProgress && (
+                <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800/50 animate-fade-in">
+                  <div className="mb-2.5 flex items-center justify-between text-sm">
+                    <span className="font-medium text-gray-600 dark:text-gray-300">卸载中... ({uninstallProgress.deletedCount}/{uninstallProgress.totalCount})</span>
+                  </div>
+                  <ProgressBar value={uninstallProgress.totalCount > 0 ? uninstallProgress.deletedCount / uninstallProgress.totalCount : 0} />
+                </div>
+              )}
+            </div>
 
-              {/* 残留文件分组 */}
-              <div className="flex-1 overflow-y-auto space-y-2">
-                {(!selectedApp.fileGroups || selectedApp.fileGroups.length === 0) &&
-                  !selectedApp.isScanComplete && (
-                    <EmptyState
-                      icon={Search}
-                      title="正在扫描残留文件..."
-                      description="请稍候"
-                    />
-                  )}
-                {(selectedApp.fileGroups ?? []).map((group) => (
-                  <Card key={group.fileType} className="p-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-gray-700 dark:text-gray-200">
-                        {FILE_TYPE_LABELS[group.fileType] ?? "未知"}
-                      </span>
-                      <span className="text-sm text-gray-500 dark:text-gray-400">
-                        {formatFileSize(group.totalSize)}
-                        <span className="ml-1 text-gray-400">
-                          ({group.files.length} 项)
-                        </span>
-                      </span>
+            {/* Detail scrollable area */}
+            <div ref={detailScrollRef} className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+              {!selectedApp ? (
+                <EmptyState icon={AppWindow} title="选择一个应用" description="从应用列表中选择查看残留文件" />
+              ) : (
+                <div className="animate-fade-in">
+                  {/* App Detail Header */}
+                  <div className="mb-5 flex items-center gap-5 rounded-2xl border border-gray-100 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800/50">
+                    <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 dark:bg-indigo-900/20">
+                      {selectedApp.iconPath ? <img src={selectedApp.iconPath} alt="" className="h-12 w-12 rounded-xl" /> : <AppWindow className="h-7 w-7 text-indigo-500" />}
                     </div>
-                    {group.files.length > 0 && (
-                      <div className="mt-2 space-y-1">
-                        {group.files.slice(0, 5).map((file) => (
-                          <div
-                            key={file.id}
-                            className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400"
-                          >
-                            <span className="truncate" title={file.path}>
-                              {file.name}
-                            </span>
-                            <span className="ml-2 shrink-0">
-                              {formatFileSize(file.size)}
-                            </span>
-                          </div>
-                        ))}
-                        {group.files.length > 5 && (
-                          <p className="text-xs text-gray-400">
-                            ...还有 {group.files.length - 5} 项
-                          </p>
-                        )}
+                    <div className="min-w-0 flex-1">
+                      <p className="text-lg font-bold text-gray-900 dark:text-gray-100">{selectedApp.showName || selectedApp.appName || "未知"}</p>
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        {selectedApp.version || "未知版本"} · {formatFileSize(selectedApp.totalSize || 0)}
+                        {selectedApp.isScanComplete && <> · {fileCount} 个残留</>}
+                      </p>
+                    </div>
+                    <Button variant="danger" size="sm" loading={processing} disabled={!selectedApp.isScanComplete || selectedFileCount === 0} onClick={() => setConfirmOpen(true)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                      卸载
+                    </Button>
+                  </div>
+
+                  {/* File Groups */}
+                  <div className="space-y-2.5">
+                    {!selectedApp.isScanComplete && fileCount === 0 && (
+                      <div className="space-y-2.5">
+                        {[1,2,3].map((i) => <Skeleton key={i} variant="card" height={70} />)}
                       </div>
                     )}
-                  </Card>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+                    {selectedApp.isScanComplete && fileCount === 0 && (
+                      <div className="flex flex-col items-center justify-center rounded-2xl border border-gray-100 bg-white py-12 dark:border-gray-700 dark:bg-gray-800/50">
+                        <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-green-50 dark:bg-green-900/20">
+                          <CheckCircle2 className="h-6 w-6 text-green-500" />
+                        </div>
+                        <p className="text-sm font-medium text-gray-500 dark:text-gray-400">未发现残留文件</p>
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">该应用很干净</p>
+                      </div>
+                    )}
+                    {(selectedApp.fileGroups ?? []).map((group) => (
+                      <AppFileGroupCard
+                        key={group.fileType}
+                        group={group}
+                        onToggleFile={toggleFileSelection}
+                        onToggleGroup={toggleGroupSelection}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Warning footer */}
+                  {selectedApp.isScanComplete && fileCount > 0 && (
+                    <div className="mt-5 flex items-start gap-2.5 rounded-xl bg-amber-50/60 px-4 py-3 dark:bg-amber-900/10">
+                      <FileWarning className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+                      <p className="text-xs leading-relaxed text-amber-600 dark:text-amber-400">
+                        卸载将删除应用本体及所有关联的残留文件。请确认选中的文件无误，此操作不可撤销。
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Footer — 关闭按钮 */}
+            <div className="shrink-0 border-t border-gray-100 px-6 py-3 dark:border-gray-700/30">
+              <button
+                onClick={handleClose}
+                className="flex items-center gap-1.5 text-sm font-medium text-gray-500 transition-colors hover:text-indigo-500 dark:text-gray-400"
+              >
+                <ChevronLeft className="h-4 w-4" />
+                关闭
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      <Dialog
+        open={confirmOpen}
+        onClose={() => setConfirmOpen(false)}
+        onConfirm={handleUninstall}
+        loading={processing}
+        title="确认卸载"
+        description={selectedApp ? `将卸载「${selectedApp.showName || selectedApp.appName}」及 ${selectedFileCount} 个选中文件，释放 ${formatFileSize(selectedFileSize)}。此操作不可撤销。` : ""}
+        confirmLabel="确认卸载"
+        danger
+      />
+    </PageContainer>
   );
 }

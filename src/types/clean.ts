@@ -1,83 +1,17 @@
 /**
- * 垃圾清理相关类型定义
- * 参考 lemon-cleaner 的 QMCategoryItem / QMActionItem / QMResultItem 模型
+ * 垃圾清理数据模型
+ *
+ * 设计理念：通用树形结构，后端定义所有分类/子分类，前端不硬编码任何 ID。
+ * - CleanCategory 可直接包含 results（无子分类）或包含 subcategories
+ * - 所有 ID 均为 string，由后端动态返回，前端无需维护枚举
  */
 
-import type { SelectionState } from "./common";
+/** 清理方式（由后端定义，前端仅做展示） */
+export type CleanMethod = "none" | "remove" | "movetrash" | "truncate" | "removelanguage";
 
-/** 清理大类 ID */
-export enum CleanCategoryId {
-  /** 系统垃圾 */
-  System = "system",
-  /** 应用垃圾 */
-  Application = "application",
-  /** 浏览器垃圾 */
-  Browser = "browser",
-}
-
-/** 系统垃圾子类 ID */
-export enum SystemSubcategoryId {
-  /** 系统缓存 */
-  Cache = "sys_cache",
-  /** 系统日志 */
-  Log = "sys_log",
-  /** 多余语言包 */
-  Language = "sys_language",
-  /** 系统临时文件 */
-  Temp = "sys_temp",
-  /** 回收站 */
-  Trash = "sys_trash",
-}
-
-/** 浏览器垃圾子类 ID */
-export enum BrowserSubcategoryId {
-  /** Safari 缓存 */
-  SafariCache = "safari_cache",
-  /** Safari Cookie */
-  SafariCookie = "safari_cookie",
-  /** Chrome 缓存 */
-  ChromeCache = "chrome_cache",
-  /** Firefox 缓存 */
-  FirefoxCache = "firefox_cache",
-}
-
-/** 扫描行为类型 */
-export enum CleanActionType {
-  /** 文件 */
-  File = "file",
-  /** 残留缓存 */
-  LeftCache = "leftcache",
-  /** 残留日志 */
-  LeftLog = "leftlog",
-  /** 目录 */
-  Directory = "dir",
-  /** 语言包 */
-  Language = "language",
-  /** 应用残留 */
-  AppLeft = "appleft",
-  /** 安装包 */
-  InstallPackage = "installpackage",
-}
-
-/** 清理方式
- *  Rust 端使用 #[serde(rename_all = "lowercase")] 序列化
- */
-export enum CleanMethod {
-  /** 无操作 */
-  None = "none",
-  /** 直接删除 */
-  Remove = "remove",
-  /** 移至废纸篓 */
-  MoveTrash = "movetrash",
-  /** 截断文件 */
-  Truncate = "truncate",
-  /** 移除语言包 */
-  RemoveLanguage = "removelanguage",
-}
-
-/** 垃圾清理扫描结果项 */
+/** 清理结果项（叶子节点） */
 export interface CleanResultItem {
-  /** 唯一标识 */
+  /** 唯一标识（格式: prefix::path） */
   id: string;
   /** 显示标题 */
   title: string;
@@ -95,9 +29,9 @@ export interface CleanResultItem {
   iconPath?: string;
 }
 
-/** 垃圾清理子类项 */
+/** 清理子分类 */
 export interface CleanSubcategory {
-  /** 子类 ID */
+  /** 子分类 ID（后端动态定义） */
   subcategoryId: string;
   /** 显示标题 */
   title: string;
@@ -109,31 +43,33 @@ export interface CleanSubcategory {
   cautious: boolean;
   /** 扫描结果列表 */
   results: CleanResultItem[];
-  /** 是否正在扫描 */
-  isScanning: boolean;
-  /** 是否已完成扫描 */
-  isScanned: boolean;
+  /** 子分类总大小（后端预计算） */
+  totalSize: number;
 }
 
-/** 垃圾清理大类项 */
+/** 清理分类（支持直接包含结果项或子分类） */
 export interface CleanCategory {
-  /** 大类 ID */
-  categoryId: CleanCategoryId;
+  /** 分类 ID（后端动态定义，如 "system"、"browser"、"application"） */
+  categoryId: string;
   /** 显示标题 */
   title: string;
   /** 提示文案 */
   tips: string;
-  /** 子类列表 */
+  /** 是否推荐清理 */
+  recommend: boolean;
+  /** 是否谨慎清理 */
+  cautious: boolean;
+  /** 子分类列表（为空时使用 results 直接展示） */
   subcategories: CleanSubcategory[];
-  /** 选中状态 */
-  selectionState: SelectionState;
-  /** 是否正在扫描 */
-  isScanning: boolean;
+  /** 直接结果项（无子分类时使用，如应用缓存） */
+  results: CleanResultItem[];
+  /** 分类总大小（后端预计算） */
+  totalSize: number;
 }
 
 /** 垃圾清理扫描结果汇总 */
 export interface CleanScanSummary {
-  /** 大类列表 */
+  /** 分类列表 */
   categories: CleanCategory[];
   /** 可清理总大小（字节） */
   totalSize: number;

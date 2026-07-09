@@ -10,11 +10,127 @@
  * 所有扫描命令使用 spawn_blocking 避免阻塞 Tauri 主线程
  */
 use std::path::PathBuf;
-use std::collections::HashMap;
 use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
 
-use crate::models::uninstall::*;
+use crate::models::uninstall::{UninstallProgressPayload, *};
+
+/// PNG 编码：将 RGBA 原始像素编码为 PNG 字节流
+fn encode_rgba_to_png(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
+    let mut png_data = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png_data, width, height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().map_err(|e| format!("PNG header: {}", e))?;
+        writer.write_image_data(data).map_err(|e| format!("PNG data: {}", e))?;
+    }
+    Ok(png_data)
+}
+
+/// 从 .app 包中提取图标，返回 base64 data URI
+/// 1. 读取 Info.plist 的 CFBundleIconFile
+/// 2. 在 Contents/Resources/ 下找到 .icns 文件
+/// 3. 解析 icns 提取最高分辨率图像
+/// 4. 编码为 PNG base64
+pub fn extract_app_icon(app_path: &PathBuf) -> String {
+    let info_plist_path = app_path.join("Contents/Info.plist");
+    let plist_value = match plist::Value::from_file(&info_plist_path) {
+        Ok(v) => v,
+        Err(_) => return String::new(),
+    };
+    let dict = match plist_value.as_dictionary() {
+        Some(d) => d,
+        None => return String::new(),
+    };
+
+    // 读取 CFBundleIconFile
+    let icon_name = match dict.get("CFBundleIconFile").and_then(|v| v.as_string()) {
+        Some(name) => name.to_string(),
+        None => return String::new(),
+    };
+
+    // 在 Contents/Resources/ 中查找图标文件
+    let resources_dir = app_path.join("Contents/Resources");
+
+    // 尝试不同的文件扩展名
+    let candidates = [
+        resources_dir.join(&icon_name),
+        resources_dir.join(format!("{}.icns", icon_name)),
+        resources_dir.join(format!("{}.tiff", icon_name)),
+        resources_dir.join(format!("{}.png", icon_name)),
+    ];
+
+    for candidate in &candidates {
+        if candidate.exists() {
+            if let Some(ext) = candidate.extension().and_then(|e| e.to_str()) {
+                match ext.to_lowercase().as_str() {
+                    "icns" => return extract_icns_to_base64(candidate),
+                    "png" => return encode_file_to_base64_png(candidate),
+                    "tiff" => return extract_tiff_to_base64_png(candidate),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    String::new()
+}
+
+/// 将 .icns 文件解析为 base64 PNG data URI
+fn extract_icns_to_base64(icns_path: &PathBuf) -> String {
+    use base64::Engine;
+    let file = match std::fs::File::open(icns_path) {
+        Ok(f) => f,
+        Err(_) => return String::new(),
+    };
+    let family = match icns::IconFamily::read(file) {
+        Ok(f) => f,
+        Err(_) => return String::new(),
+    };
+
+    // 按优先级尝试不同尺寸（从大到小）
+    let icon_types = [
+        icns::IconType::RGBA32_512x512_2x,
+        icns::IconType::RGBA32_512x512,
+        icns::IconType::RGBA32_256x256,
+        icns::IconType::RGBA32_128x128,
+        icns::IconType::RGBA32_64x64,
+        icns::IconType::RGBA32_32x32,
+    ];
+
+    for icon_type in &icon_types {
+        if let Ok(image) = family.get_icon_with_type(*icon_type) {
+            let width = image.width();
+            let height = image.height();
+            let data = image.data();
+
+            if let Ok(png_data) = encode_rgba_to_png(data, width, height) {
+                let b64 = base64::engine::general_purpose::STANDARD.encode(&png_data);
+                return format!("data:image/png;base64,{}", b64);
+            }
+        }
+    }
+
+    String::new()
+}
+
+/// 将 PNG 文件直接读取为 base64 data URI
+fn encode_file_to_base64_png(path: &PathBuf) -> String {
+    use base64::Engine;
+    if let Ok(data) = std::fs::read(path) {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+        return format!("data:image/png;base64,{}", b64);
+    }
+    String::new()
+}
+
+/// 将 TIFF 文件转为 base64 PNG data URI
+/// macOS 的 TIFF 图标文件实际是多帧 TIFF，这里暂不处理（大部分应用用 .icns）
+fn extract_tiff_to_base64_png(tiff_path: &PathBuf) -> String {
+    let _ = tiff_path;
+    String::new()
+}
 
 /// 事件名称常量
 const EVENT_UNINSTALL_PROGRESS: &str = "uninstall://progress";
@@ -139,30 +255,20 @@ fn calculate_app_size(path: &PathBuf) -> u64 {
 /// 参考 lemon-cleaner 的 LMLocalAppListManager.scanAllInstalledApps
 #[tauri::command]
 pub async fn scan_installed_apps() -> Result<Vec<InstalledApp>, String> {
-    log::info!("收到扫描应用列表命令");
-
-    let result = tauri::async_runtime::spawn_blocking(|| {
+    log::info!("[uninstall] 收到扫描已安装应用命令");
+    let scan_start = std::time::Instant::now();
+    Ok(tauri::async_runtime::spawn_blocking(move || {
         let app_dirs = get_application_dirs();
-        log::info!("发现 {} 个应用", app_dirs.len());
-        let mut apps = vec![];
+        log::info!("[uninstall] 发现 {} 个 .app 目录", app_dirs.len());
+        let mut apps = Vec::with_capacity(app_dirs.len());
 
-        for (idx, app_path) in app_dirs.iter().enumerate() {
-            // 读取 Info.plist 获取应用元数据
+        for app_path in &app_dirs {
             let meta = read_app_metadata(app_path);
-
-            log::debug!(
-                "[{}/{}] {} (bundleId: {}, version: {})",
-                idx + 1,
-                app_dirs.len(),
-                meta.app_name,
-                meta.bundle_id,
-                meta.version
-            );
-
             let bundle_size = calculate_app_size(app_path);
+            let icon_path = extract_app_icon(app_path);
 
             apps.push(InstalledApp {
-                id: format!("app_{}", idx),
+                id: app_path.display().to_string(),
                 bundle_id: meta.bundle_id,
                 app_name: meta.app_name.clone(),
                 show_name: meta.show_name,
@@ -171,7 +277,7 @@ pub async fn scan_installed_apps() -> Result<Vec<InstalledApp>, String> {
                 bundle_path: app_path.display().to_string(),
                 bundle_size,
                 last_used_date: 0,
-                icon_path: String::new(),
+                icon_path,
                 total_size: bundle_size,
                 file_item_count: 0,
                 selected_size: 0,
@@ -181,19 +287,16 @@ pub async fn scan_installed_apps() -> Result<Vec<InstalledApp>, String> {
             });
         }
 
-        // 按大小降序排列
         apps.sort_by(|a, b| b.bundle_size.cmp(&a.bundle_size));
-        log::info!("应用列表扫描完成: {} 个应用", apps.len());
-
+        log::info!(
+            "[uninstall] 应用扫描完成: {} 个应用, 耗时 {:.2}s",
+            apps.len(),
+            scan_start.elapsed().as_secs_f64()
+        );
         apps
     })
     .await
-    .map_err(|e| {
-        log::error!("扫描应用列表线程异常: {}", e);
-        format!("扫描失败: {}", e)
-    })?;
-
-    Ok(result)
+    .map_err(|e| format!("扫描失败: {}", e))?)
 }
 
 /// 在指定目录下搜索与 appName / bundleId 匹配的文件/目录
@@ -209,21 +312,26 @@ fn search_files_by_name(
         return results;
     }
 
-    // 去除空格并转小写，用于匹配
     let name_lower = app_name.replace(' ', "").to_lowercase();
     let bundle_lower = bundle_id.replace(' ', "").to_lowercase();
+
+    if name_lower.is_empty() && bundle_lower.is_empty() {
+        return results;
+    }
 
     if let Ok(entries) = std::fs::read_dir(search_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
-            let file_name = entry.file_name().to_string_lossy().to_string();
-            let file_name_lower = file_name.replace(' ', "").to_lowercase();
+            let file_name_lower: String = entry
+                .file_name()
+                .to_string_lossy()
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .flat_map(|c| c.to_lowercase())
+                .collect();
 
-            // 匹配规则（参考 lemon-cleaner）:
-            // 1. 文件名与 appName 匹配
-            // 2. 文件名与 bundleId 匹配（可能包含前缀如 com.xxx.appName）
-            let name_match = !name_lower.is_empty() && file_name_lower.contains(&name_lower);
-            let bundle_match = !bundle_lower.is_empty() && file_name_lower.contains(&bundle_lower);
+            let name_match = file_name_lower.contains(&name_lower);
+            let bundle_match = file_name_lower.contains(&bundle_lower);
 
             if name_match || bundle_match {
                 results.push(path);
@@ -242,45 +350,30 @@ pub async fn scan_app_files(
     app_id: String,
     _scan_type: AppScanType,
 ) -> Result<InstalledApp, String> {
-    log::info!("收到扫描应用残留命令: app_id={}", app_id);
+    log::info!("[uninstall] 收到扫描残留文件命令: app_id={}", app_id);
+    let app_path = PathBuf::from(&app_id);
+    if !app_path.exists() || app_path.extension().map(|e| e != "app").unwrap_or(true) {
+        log::error!("[uninstall] 应用路径不存在: {}", app_id);
+        return Err(format!("应用路径不存在: {}", app_id));
+    }
 
-    let app_id_clone = app_id.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let app_dirs = get_application_dirs();
-        let idx: usize = app_id_clone
-            .strip_prefix("app_")
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+    let scan_start = std::time::Instant::now();
+    let bundle_path = app_path.display().to_string();
+    let id = app_id.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let meta = read_app_metadata(&app_path);
+        log::info!("[uninstall] 应用: name={}, bundle_id={}", meta.app_name, meta.bundle_id);
+        let bundle_size = calculate_app_size(&app_path);
+        let icon_path = extract_app_icon(&app_path);
+        let mut file_groups = Vec::with_capacity(8);
 
-        if idx >= app_dirs.len() {
-            log::error!("应用不存在: app_id={}", app_id_clone);
-            return Err("应用不存在".to_string());
-        }
-
-        let app_path = &app_dirs[idx];
-        let meta = read_app_metadata(app_path);
-        let app_name = &meta.app_name;
-        let bundle_id = &meta.bundle_id;
-
-        log::info!(
-            "扫描应用残留: {} (bundleId: {}, path: {})",
-            app_name,
-            bundle_id,
-            app_path.display()
-        );
-
-        let mut file_groups: Vec<AppFileGroup> = vec![];
-
-        // 1. Bundle - 应用本体（参考 lemon-cleaner 的 searchBundles）
-        let bundle_size = calculate_app_size(app_path);
         file_groups.push(AppFileGroup {
             file_type: UninstallFileType::Bundle,
             total_size: bundle_size,
             files: vec![AppFileItem {
-                id: format!("file_bundle_{}", app_path.display()),
-                path: app_path.display().to_string(),
-                name: app_path
-                    .file_name()
+                id: format!("file_bundle_{}", bundle_path),
+                path: bundle_path.clone(),
+                name: app_path.file_name()
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default(),
                 size: bundle_size,
@@ -293,149 +386,105 @@ pub async fn scan_app_files(
             selection_state: "on".to_string(),
         });
 
-        // 搜索 Library 下的残留文件
         if let Some(home) = dirs::home_dir() {
-            // 2. Support - Application Support（参考 searchSupports）
             let support_dirs = vec![
                 home.join("Library/Application Support"),
                 PathBuf::from("/Library/Application Support"),
             ];
-            let support_files = search_files_by_name_in_dirs(&support_dirs, app_name, bundle_id);
+            let support_files = search_files_by_name_in_dirs(&support_dirs, &meta.app_name, &meta.bundle_id);
             if !support_files.is_empty() {
-                file_groups.push(build_file_group(
-                    UninstallFileType::Support,
-                    &support_files,
-                ));
+                file_groups.push(build_file_group(UninstallFileType::Support, &support_files));
             }
 
-            // 3. Cache - Caches（参考 searchCaches）
             let cache_dirs = vec![
                 home.join("Library/Caches"),
                 PathBuf::from("/Library/Caches"),
             ];
-            let cache_files = search_files_by_name_in_dirs(&cache_dirs, app_name, bundle_id);
+            let cache_files = search_files_by_name_in_dirs(&cache_dirs, &meta.app_name, &meta.bundle_id);
             if !cache_files.is_empty() {
-                file_groups.push(build_file_group(
-                    UninstallFileType::Cache,
-                    &cache_files,
-                ));
+                file_groups.push(build_file_group(UninstallFileType::Cache, &cache_files));
             }
 
-            // 4. Preference - Preferences（参考 searchPreferences）
-            // 偏好设置按 bundleId 精确匹配 .plist 文件
             let pref_dir = home.join("Library/Preferences");
             let mut pref_files = vec![];
-            if !bundle_id.is_empty() {
-                let pref_path = pref_dir.join(format!("{}.plist", bundle_id));
+            if !meta.bundle_id.is_empty() {
+                let pref_path = pref_dir.join(format!("{}.plist", meta.bundle_id));
                 if pref_path.exists() {
                     pref_files.push(pref_path);
                 }
             }
-            // 也搜索以 appName 命名的 plist
-            let name_prefs = search_files_by_name_in_dirs(&[pref_dir.clone()], app_name, bundle_id);
+            let name_prefs = search_files_by_name_in_dirs(&[pref_dir.clone()], &meta.app_name, &meta.bundle_id);
             pref_files.extend(name_prefs);
             if !pref_files.is_empty() {
-                file_groups.push(build_file_group(
-                    UninstallFileType::Preference,
-                    &pref_files,
-                ));
+                file_groups.push(build_file_group(UninstallFileType::Preference, &pref_files));
             }
 
-            // 5. State - Saved Application State（参考 searchStates）
-            if !bundle_id.is_empty() {
-                let state_path = home.join("Library/Saved Application State").join(format!("{}.savedState", bundle_id));
+            if !meta.bundle_id.is_empty() {
+                let state_path = home.join("Library/Saved Application State")
+                    .join(format!("{}.savedState", meta.bundle_id));
                 if state_path.exists() {
-                    file_groups.push(build_file_group(
-                        UninstallFileType::State,
-                        &[state_path],
-                    ));
+                    file_groups.push(build_file_group(UninstallFileType::State, &[state_path]));
                 }
             }
 
-            // 6. Log - Logs（参考 searchLogs）
             let log_dirs = vec![
                 home.join("Library/Logs"),
                 PathBuf::from("/Library/Logs"),
             ];
-            let log_files = search_files_by_name_in_dirs(&log_dirs, app_name, bundle_id);
+            let log_files = search_files_by_name_in_dirs(&log_dirs, &meta.app_name, &meta.bundle_id);
             if !log_files.is_empty() {
-                file_groups.push(build_file_group(
-                    UninstallFileType::Log,
-                    &log_files,
-                ));
+                file_groups.push(build_file_group(UninstallFileType::Log, &log_files));
             }
 
-            // 7. Sandbox - Containers（参考 searchSandboxs）
-            // 沙盒目录按 bundleId 匹配
-            if !bundle_id.is_empty() {
-                let container_path = home.join("Library/Containers").join(bundle_id);
+            if !meta.bundle_id.is_empty() {
+                let container_path = home.join("Library/Containers").join(&meta.bundle_id);
                 if container_path.exists() {
-                    file_groups.push(build_file_group(
-                        UninstallFileType::Sandbox,
-                        &[container_path],
-                    ));
+                    file_groups.push(build_file_group(UninstallFileType::Sandbox, &[container_path]));
                 }
             }
 
-            // 8. Reporter - CrashReporter / DiagnosticReports（参考 searchCrashReporters）
             let reporter_dirs = vec![
                 home.join("Library/Application Support/CrashReporter"),
                 home.join("Library/Logs/DiagnosticReports"),
                 PathBuf::from("/Library/Application Support/CrashReporter"),
                 PathBuf::from("/Library/Logs/DiagnosticReports"),
             ];
-            let reporter_files = search_files_by_name_in_dirs(&reporter_dirs, app_name, bundle_id);
+            let reporter_files = search_files_by_name_in_dirs(&reporter_dirs, &meta.app_name, &meta.bundle_id);
             if !reporter_files.is_empty() {
-                file_groups.push(build_file_group(
-                    UninstallFileType::Reporter,
-                    &reporter_files,
-                ));
+                file_groups.push(build_file_group(UninstallFileType::Reporter, &reporter_files));
             }
         }
 
-        // 计算总大小
         let total_size: u64 = file_groups.iter().map(|g| g.total_size).sum();
-        let file_item_count = file_groups.iter().map(|g| g.files.len() as u64).sum::<u64>();
-        let selected_count = file_groups.iter().map(|g| g.selected_count).sum::<u64>();
-        let selected_size = file_groups.iter().map(|g| g.selected_size).sum::<u64>();
-
         log::info!(
-            "应用 {} 残留扫描完成: {} 组, {} 项, 总计 {} 字节",
-            app_name,
+            "[uninstall] 残留文件扫描完成: {} 个分组, 总计 {:.2} MB, 耗时 {:.2}s",
             file_groups.len(),
-            file_item_count,
-            total_size
+            total_size as f64 / 1_048_576.0,
+            scan_start.elapsed().as_secs_f64()
         );
 
         Ok(InstalledApp {
-            id: app_id_clone,
+            id,
             bundle_id: meta.bundle_id,
-            app_name: meta.app_name.clone(),
+            app_name: meta.app_name,
             show_name: meta.show_name,
             executable_name: meta.executable_name,
             version: meta.version,
-            bundle_path: app_path.display().to_string(),
+            bundle_path,
             bundle_size,
             last_used_date: 0,
-            icon_path: String::new(),
-            total_size,
-            file_item_count,
-            selected_size,
-            selected_count,
+            icon_path,
+            total_size: file_groups.iter().map(|g| g.total_size).sum(),
+            file_item_count: file_groups.iter().map(|g| g.files.len() as u64).sum(),
+            selected_count: file_groups.iter().map(|g| g.selected_count).sum(),
+            selected_size: file_groups.iter().map(|g| g.selected_size).sum(),
+            // TODO: fold into single pass if this remains a hotspot
             file_groups,
             is_scan_complete: true,
         })
     })
     .await
-    .map_err(|e| {
-        log::error!("扫描应用残留线程异常: {}", e);
-        format!("扫描失败: {}", e)
-    })?;
-
-    result.map_err(|e| {
-        log::error!("扫描应用残留失败: {}", e);
-        e
-    })
+    .map_err(|e| format!("扫描失败: {}", e))?
 }
 
 /// 在多个目录中搜索与 appName / bundleId 匹配的文件
@@ -444,7 +493,7 @@ fn search_files_by_name_in_dirs(
     app_name: &str,
     bundle_id: &str,
 ) -> Vec<PathBuf> {
-    let mut all_results = vec![];
+    let mut all_results = Vec::with_capacity(dirs.len());
     for dir in dirs {
         let results = search_files_by_name(dir, app_name, bundle_id);
         all_results.extend(results);
@@ -458,16 +507,17 @@ fn search_files_by_name_in_dirs(
 /// 构建文件分组（参考 lemon-cleaner 的 genFileItemArrayWithPaths）
 /// 默认选中（与 lemon-cleaner 一致，除 Other 类型外默认选中）
 fn build_file_group(file_type: UninstallFileType, paths: &[PathBuf]) -> AppFileGroup {
+    let prefix = format!("file_{:?}_", file_type);
     let files: Vec<AppFileItem> = paths
         .iter()
         .map(|path| {
-            let size = if path.is_dir() {
-                calculate_app_size(path)
-            } else {
-                path.metadata().map(|m| m.len()).unwrap_or(0)
+            let size = match std::fs::metadata(path) {
+                Ok(m) if m.is_dir() => calculate_app_size(path),
+                Ok(m) => m.len(),
+                Err(_) => 0,
             };
             AppFileItem {
-                id: format!("file_{:?}_{}", file_type, path.display()),
+                id: format!("{}{}", prefix, path.display()),
                 path: path.display().to_string(),
                 name: path
                     .file_name()
@@ -502,7 +552,7 @@ pub async fn uninstall_app(
     selected_file_ids: Vec<String>,
 ) -> Result<UninstallResult, String> {
     log::info!(
-        "收到卸载命令: app_id={}, 选中 {} 项",
+        "[uninstall] 收到卸载命令: app_id={}, 选中 {} 项",
         app_id,
         selected_file_ids.len()
     );
@@ -519,15 +569,15 @@ pub async fn uninstall_app(
             // 从 ID 中提取路径（格式为 file_{type}_{path}）
             if let Some(path_str) = file_id.splitn(3, '_').nth(2) {
                 let path = PathBuf::from(path_str);
-                if path.exists() {
-                    let size = if path.is_dir() {
-                        calculate_app_size(&path)
-                    } else {
-                        path.metadata().map(|m| m.len()).unwrap_or(0)
-                    };
+                let size = match std::fs::metadata(&path) {
+                    Ok(m) if m.is_dir() => calculate_app_size(&path),
+                    Ok(m) => m.len(),
+                    Err(_) => 0,
+                };
+                if size > 0 {
 
                     log::info!(
-                        "[{}/{}] 删除: {}",
+                        "[uninstall] [{}/{}] 删除: {}",
                         idx + 1,
                         total_count,
                         path.display()
@@ -536,33 +586,32 @@ pub async fn uninstall_app(
                         Ok(_) => {
                             freed_size += size;
                             deleted_file_count += 1;
-                            log::info!("删除成功: {}", path.display());
+                            log::info!("[uninstall] 删除成功: {}", path.display());
                         }
                         Err(e) => {
                             failed_file_count += 1;
-                            log::error!("删除失败: {} - {}", path.display(), e);
+                            log::error!("[uninstall] 删除失败: {} - {}", path.display(), e);
                         }
                     }
                 } else {
-                    log::warn!("文件不存在: {}", path.display());
+                    log::warn!("[uninstall] 文件不存在: {}", path.display());
                     failed_file_count += 1;
                 }
             }
 
-            // 发送进度
             let _ = app_clone.emit(
                 EVENT_UNINSTALL_PROGRESS,
-                serde_json::json!({
-                    "appId": &app_id_clone,
-                    "deletedCount": idx + 1,
-                    "totalCount": total_count,
-                    "isFinished": idx + 1 == total_count as usize,
-                }),
+                UninstallProgressPayload {
+                    app_id: app_id_clone.clone(),
+                    deleted_count: (idx + 1) as u64,
+                    total_count,
+                    is_finished: idx + 1 == total_count as usize,
+                },
             );
         }
 
         log::info!(
-            "卸载完成: 删除 {} 项, 释放 {} 字节, 失败 {} 项",
+            "[uninstall] 卸载完成: 删除 {} 项, 释放 {} 字节, 失败 {} 项",
             deleted_file_count,
             freed_size,
             failed_file_count
@@ -577,7 +626,7 @@ pub async fn uninstall_app(
     })
     .await
     .map_err(|e| {
-        log::error!("卸载线程异常: {}", e);
+        log::error!("[uninstall] 卸载线程异常: {}", e);
         format!("卸载失败: {}", e)
     })?;
 
