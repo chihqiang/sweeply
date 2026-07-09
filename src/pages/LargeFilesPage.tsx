@@ -13,7 +13,7 @@ import {
 } from "@/components/ui";
 import { scanLargeFiles, stopLargeFileScan, deleteLargeFiles, openFileLocation } from "@/services/largeFileService";
 import type { LargeFile, LargeFileProgress } from "@/types/largeFiles";
-import { FileSearch, FolderOpen, Play, Trash2, File, ExternalLink, ChevronDown, ChevronRight } from "lucide-react";
+import { FileSearch, Play, Trash2, File, ExternalLink, ChevronDown, ChevronRight, FolderPlus } from "lucide-react";
 import { formatFileSize } from "@/utils/format";
 import { cn } from "@/utils/cn";
 
@@ -257,15 +257,14 @@ export default function LargeFilesPage() {
         onScan={handleScan}
         scanLabel="开始扫描"
         scanIcon={Play}
+        onIconClick={handleSelectPath}
+        iconTooltip={scanPath ? scanPath.replace(/^\/+Users\/[^/]+/, "~") : "点击选择扫描目录"}
         error={error}
       >
-        <div className="flex items-center gap-3">
-          <Button variant="outline" onClick={handleSelectPath}>
-            <FolderOpen className="h-4 w-4" />
-            {scanPath ? scanPath.replace(/\/Users\/[\w]+/, "~") : "选择目录"}
-          </Button>
-          <SizeThresholdSelector minSize={minSize} setMinSize={setMinSize} />
-        </div>
+        {scanPath && (
+          <span className="text-sm text-gray-500 dark:text-gray-400">{scanPath.replace(/^\/+Users\/[^/]+/, "~")}</span>
+        )}
+        <SizeThresholdSelector minSize={minSize} setMinSize={setMinSize} />
       </ScanIdleView>
     );
   }
@@ -362,10 +361,12 @@ export default function LargeFilesPage() {
     >
       {/* 配置 */}
       <div className="mb-5 flex flex-wrap items-center gap-3">
-        <Button variant="outline" onClick={handleSelectPath}>
-          <FolderOpen className="h-4 w-4" />
-          {scanPath ? scanPath.replace(/\/Users\/[\w]+/, "~") : "选择目录"}
+        <Button variant="outline" size="icon" onClick={handleSelectPath} title="选择扫描目录">
+          <FolderPlus className="h-4 w-4" />
         </Button>
+        {scanPath && (
+          <span className="text-sm text-gray-500 dark:text-gray-400">{scanPath.replace(/^\/+Users\/[^/]+/, "~")}</span>
+        )}
         <SizeThresholdSelector minSize={minSize} setMinSize={setMinSize} />
       </div>
 

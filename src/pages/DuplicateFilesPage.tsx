@@ -10,7 +10,7 @@ import {
 } from "@/components/ui";
 import { scanDuplicates, stopDuplicateScan, deleteDuplicateFiles } from "@/services/duplicateFileService";
 import type { DuplicateGroup, DuplicateProgress, DuplicateFile } from "@/types/duplicateFiles";
-import { Copy, FolderPlus, Play, Trash2, AlertCircle, File, Wand2 } from "lucide-react";
+import { Copy, Play, Trash2, AlertCircle, File, Wand2, FolderPlus } from "lucide-react";
 import { formatFileSize } from "@/utils/format";
 import { cn } from "@/utils/cn";
 
@@ -254,14 +254,10 @@ export default function DuplicateFilesPage() {
         onScan={handleScan}
         scanLabel="开始扫描"
         scanIcon={Play}
+        onIconClick={handleAddPath}
+        iconTooltip={scanPaths.length > 0 ? `${scanPaths.length} 个已选目录` : "点击添加扫描目录"}
         error={error}
       >
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleAddPath}>
-            <FolderPlus className="h-3.5 w-3.5" />
-            添加目录
-          </Button>
-        </div>
         <ScanPathTags scanPaths={scanPaths} onRemove={removePath} />
       </ScanIdleView>
     );
@@ -347,9 +343,8 @@ export default function DuplicateFilesPage() {
       <div className="mb-5 rounded-xl border border-gray-100 bg-white p-5 dark:border-gray-700/30 dark:bg-gray-800/50">
         <div className="mb-3 flex items-center justify-between">
           <p className="text-sm font-semibold text-gray-700 dark:text-gray-200">扫描目录</p>
-          <Button variant="outline" size="sm" onClick={handleAddPath} disabled={scanning}>
-            <FolderPlus className="h-3.5 w-3.5" />
-            添加目录
+          <Button variant="outline" size="icon" onClick={handleAddPath} title="添加目录" disabled={scanning}>
+            <FolderPlus className="h-4 w-4" />
           </Button>
         </div>
         <ScanPathTags scanPaths={scanPaths} onRemove={removePath} />

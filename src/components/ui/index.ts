@@ -28,3 +28,5 @@ export { ScanProgressView } from "./ScanProgressView";
 export type { ScanProgressViewProps } from "./ScanProgressView";
 export { ScanResultLayout } from "./ScanResultLayout";
 export type { ScanResultLayoutProps } from "./ScanResultLayout";
+export { PathPicker } from "./PathPicker";
+export type { PathPickerProps } from "./PathPicker";

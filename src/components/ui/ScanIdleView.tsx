@@ -1,8 +1,9 @@
 import { memo, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
-import { Search } from "lucide-react";
+import { Search, FolderPlus } from "lucide-react";
 import { Button } from "./Button";
 import { ErrorAlert } from "./PageContainer";
+import { cn } from "@/utils/cn";
 
 /**
  * 扫描类页面 — 初始（空闲）状态通用视图
@@ -27,7 +28,11 @@ export interface ScanIdleViewProps {
   scanDisabled?: boolean;
   /** 扫描按钮是否加载中 */
   scanLoading?: boolean;
-  /** 配置区域内容（目录选择、阈值选择等），渲染在描述和按钮之间 */
+  /** 点击顶部圆形图标时的回调（用于选择扫描目录） */
+  onIconClick?: () => void;
+  /** 已选目录路径提示，显示在图标下方（hover 时可见） */
+  iconTooltip?: string;
+  /** 配置区域内容（阈值选择等），渲染在描述和按钮之间 */
   children?: ReactNode;
   /** 成功/信息横幅，渲染在按钮下方 */
   banner?: ReactNode;
@@ -46,6 +51,8 @@ export const ScanIdleView = memo(function ScanIdleView({
   scanIcon: ScanIcon = Search,
   scanDisabled = false,
   scanLoading = false,
+  onIconClick,
+  iconTooltip,
   children,
   banner,
   error,
@@ -53,17 +60,42 @@ export const ScanIdleView = memo(function ScanIdleView({
 }: ScanIdleViewProps) {
   return (
     <div className="flex h-full flex-col items-center justify-center px-6">
-      {/* 装饰性圆形图形 */}
-      <div className="relative mb-8 flex h-32 w-32 items-center justify-center">
+      {/* 装饰性圆形图形 — 支持点击选择目录 */}
+      <button
+        type="button"
+        onClick={onIconClick}
+        disabled={!onIconClick}
+        title={onIconClick ? (iconTooltip ?? "点击选择扫描目录") : undefined}
+        className={cn(
+          "group relative mb-8 flex h-32 w-32 items-center justify-center",
+          onIconClick && "cursor-pointer",
+          !onIconClick && "cursor-default",
+        )}
+      >
         {/* 外圈光晕 */}
-        <div className="absolute inset-0 rounded-full bg-indigo-100/40 blur-2xl dark:bg-indigo-900/20" />
+        <div className={cn(
+          "absolute inset-0 rounded-full bg-indigo-100/40 blur-2xl dark:bg-indigo-900/20",
+          onIconClick && "transition-all duration-300 group-hover:bg-indigo-200/50 dark:group-hover:bg-indigo-800/30",
+        )} />
         {/* 主圆 */}
-        <div className="relative flex h-32 w-32 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 shadow-xl shadow-indigo-500/30">
+        <div className={cn(
+          "relative flex h-32 w-32 items-center justify-center rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 shadow-xl shadow-indigo-500/30",
+          onIconClick && "transition-transform duration-300 group-hover:scale-105 group-active:scale-95",
+        )}>
           <Icon className="h-12 w-12 text-white" />
+          {/* 右下角文件夹角标 — 仅在可点击时显示 */}
+          {onIconClick && (
+            <span className="absolute -bottom-1 -right-1 flex h-8 w-8 items-center justify-center rounded-full bg-white shadow-lg dark:bg-gray-800">
+              <FolderPlus className="h-4 w-4 text-indigo-500" />
+            </span>
+          )}
         </div>
         {/* 装饰弧线 */}
         <svg
-          className="absolute inset-0 -rotate-90"
+          className={cn(
+            "absolute inset-0 -rotate-90",
+            onIconClick && "transition-transform duration-500 group-hover:rotate-0",
+          )}
           width="128"
           height="128"
           viewBox="0 0 128 128"
@@ -78,7 +110,7 @@ export const ScanIdleView = memo(function ScanIdleView({
             strokeDasharray="4 4"
           />
         </svg>
-      </div>
+      </button>
 
       <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">
         {title}

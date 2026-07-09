@@ -9,7 +9,7 @@ import {
 } from "@/components/ui";
 import { scanDiskUsage, scanDiskUsageDetail, stopDiskScan } from "@/services/diskUsageService";
 import type { DiskItem, DiskUsageProgress } from "@/types/diskUsage";
-import { HardDrive, FolderOpen, ArrowLeft, Play, File, Folder } from "lucide-react";
+import { HardDrive, FolderPlus, ArrowLeft, Play, File, Folder } from "lucide-react";
 import { formatFileSize } from "@/utils/format";
 import { cn } from "@/utils/cn";
 
@@ -138,8 +138,11 @@ export default function DiskUsagePage() {
   const progressPct = useMemo(() => {
     if (!progress) return 0;
     if (progress.total && progress.total > 0) return progress.current / progress.total;
-    return 0; // 无 total 时不显示百分比
+    return 0; // 统计阶段无 total
   }, [progress]);
+
+  // 是否处于统计阶段（total 为 0 表示还在统计文件总数）
+  const isCounting = !!(progress && progress.total === 0);
 
   /* ── 空闲态 — 使用通用组件 ── */
   if (items.length === 0 && !scanning) {
@@ -151,12 +154,13 @@ export default function DiskUsagePage() {
         onScan={handleScan}
         scanLabel="开始分析"
         scanIcon={Play}
+        onIconClick={handleSelectPath}
+        iconTooltip={scanPath ? shortenPath(scanPath) : "点击选择分析目录"}
         error={error}
       >
-        <Button variant="outline" onClick={handleSelectPath}>
-          <FolderOpen className="h-4 w-4" />
-          {scanPath ? shortenPath(scanPath) : "选择目录"}
-        </Button>
+        {scanPath && (
+          <span className="text-sm text-gray-500 dark:text-gray-400">{shortenPath(scanPath)}</span>
+        )}
       </ScanIdleView>
     );
   }
@@ -164,19 +168,25 @@ export default function DiskUsagePage() {
   /* ── 扫描中 — 使用通用组件 ── */
   if (scanning) {
     const countDetail = progress
-      ? progress.total && progress.total > 0
-        ? `${progress.current} / ${progress.total}`
-        : `已处理 ${progress.current} 项`
+      ? isCounting
+        ? `正在统计文件... ${progress.current} 项`
+        : progress.total && progress.total > 0
+          ? `${progress.current} / ${progress.total}`
+          : `已处理 ${progress.current} 项`
       : undefined;
     return (
       <ScanProgressView
-        progress={progressPct > 0 ? progressPct : 0.3}
+        progress={isCounting ? 0.15 : (progressPct > 0 ? progressPct : 0.3)}
         centerContent={
           <span className="text-4xl font-bold gradient-text">
-            {progressPct > 0 ? Math.round(progressPct * 100) : "..."}
+            {isCounting
+              ? "..."
+              : progressPct > 0
+                ? `${Math.round(progressPct * 100)}%`
+                : "..."}
           </span>
         }
-        centerLabel="分析中"
+        centerLabel={isCounting ? "统计中" : "分析中"}
         description={countDetail || "正在扫描文件..."}
         detail={progress?.currentPath || undefined}
         onStop={handleStop}
@@ -195,10 +205,12 @@ export default function DiskUsagePage() {
     >
       {/* 路径选择 */}
       <div className="mb-5 flex items-center gap-3">
-        <Button variant="outline" onClick={handleSelectPath}>
-          <FolderOpen className="h-4 w-4" />
-          {scanPath ? shortenPath(scanPath) : "选择目录"}
+        <Button variant="outline" size="icon" onClick={handleSelectPath} title="选择目录">
+          <FolderPlus className="h-4 w-4" />
         </Button>
+        {scanPath && (
+          <span className="text-sm text-gray-500 dark:text-gray-400">{shortenPath(scanPath)}</span>
+        )}
       </div>
 
       {/* 面包屑 */}

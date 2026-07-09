@@ -34,23 +34,46 @@ pub struct DiskUsageProgress {
     pub current_path: String,
 }
 
-/// 单遍扫描：所有文件按父目录累计大小，构建树
+/// 两遍扫描：先统计总数，再累加大小并构建树
 fn scan_dir_tree(path: &PathBuf, app: &AppHandle, flag: &Arc<AtomicBool>) -> Result<Vec<DiskItem>, String> {
     log::info!("[disk_usage] 开始扫描目录树: {}", path.display());
     let mut dir_sizes: HashMap<PathBuf, (u64, u64)> = HashMap::new();
     let mut total = 0u64;
+    let mut current_dir = String::new();
 
-    // 快速统计总数
+    // 第一遍：快速统计总数（同时发进度）
     for entry in WalkDir::new(path).follow_links(false).into_iter().filter_map(|e| e.ok()) {
+        if flag.load(Ordering::SeqCst) {
+            log::warn!("[disk_usage] 统计阶段被取消");
+            return Ok(vec![]);
+        }
         if entry.file_type().is_file() || entry.file_type().is_dir() {
             total += 1;
         }
+        if entry.file_type().is_dir() {
+            current_dir = entry.path().to_string_lossy().to_string();
+        }
+        if total % 500 == 0 {
+            // 统计阶段：total 为 0 表示尚未完成统计
+            app.emit(EVENT_SCAN_PROGRESS, DiskUsageProgress {
+                current: total,
+                total: 0, // 0 表示仍在统计中
+                current_path: current_dir.clone(),
+            }).ok();
+        }
     }
+    log::info!("[disk_usage] 统计完成，共 {} 个条目", total);
+
+    // 通知前端统计完成，进入扫描阶段
+    app.emit(EVENT_SCAN_PROGRESS, DiskUsageProgress {
+        current: 0,
+        total,
+        current_path: String::new(),
+    }).ok();
 
     let mut scanned = 0u64;
-    let mut current_dir = String::new();
 
-    // 单遍扫描：累加文件大小到所有父目录
+    // 第二遍：累加文件大小到所有父目录
     for entry in WalkDir::new(path).follow_links(false).into_iter().filter_map(|e| e.ok()) {
         if flag.load(Ordering::SeqCst) {
             log::warn!("[disk_usage] 扫描被取消 (已扫描 {}/{})", scanned, total);
@@ -63,7 +86,7 @@ fn scan_dir_tree(path: &PathBuf, app: &AppHandle, flag: &Arc<AtomicBool>) -> Res
         }
 
         scanned += 1;
-        if scanned % 1000 == 0 {
+        if scanned % 200 == 0 {
             app.emit(EVENT_SCAN_PROGRESS, DiskUsageProgress {
                 current: scanned.min(total),
                 total,
@@ -91,6 +114,13 @@ fn scan_dir_tree(path: &PathBuf, app: &AppHandle, flag: &Arc<AtomicBool>) -> Res
             }
         }
     }
+
+    // 最终进度：100%
+    app.emit(EVENT_SCAN_PROGRESS, DiskUsageProgress {
+        current: total,
+        total,
+        current_path: String::new(),
+    }).ok();
 
     // 构建树
     build_children(path, &dir_sizes)
