@@ -13,7 +13,7 @@ import { cn } from "@/utils/cn";
 type SortBy = "name" | "size-desc" | "last-used";
 
 export default function UninstallPage() {
-  const { appList, selectedApp, uninstallResult, status, loading, uninstallProgress, error, scanApps, scanFiles, executeUninstall, selectApp, toggleFileSelection, toggleGroupSelection } = useUninstall();
+  const { appList, selectedApp, uninstallResult, status, loading, scanProgress, uninstallProgress, error, scanApps, scanFiles, executeUninstall, selectApp, toggleFileSelection, toggleGroupSelection } = useUninstall();
   const { addToast } = useToast();
   const [query, setQuery] = useState("");
   const [sortBy, setSortBy] = useState<SortBy>("name");
@@ -120,13 +120,18 @@ export default function UninstallPage() {
       {/* App count */}
       <div className="mb-4 flex items-center gap-2">
         <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
-          {loading ? "加载中..." : `${filtered.length} 个应用`}
+          {loading
+            ? scanProgress && scanProgress.total > 0
+              ? `扫描中... ${scanProgress.scanned}/${scanProgress.total}`
+              : "加载中..."
+            : `${filtered.length} 个应用`}
         </span>
       </div>
 
       {/* Grid */}
       <div className="min-h-0 flex-1 overflow-y-auto pb-4">
-        {loading && filtered.length === 0 && (
+        {/* 加载中且列表为空时显示骨架屏 */}
+        {loading && appList.length === 0 && (
           <div className="grid grid-cols-4 gap-3 sm:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10">
             {[1,2,3,4,5,6,7,8,9,10].map((i) => (
               <div key={i} className="flex flex-col items-center gap-2 p-3">
@@ -134,6 +139,20 @@ export default function UninstallPage() {
                 <Skeleton variant="text" width={48} height={10} />
               </div>
             ))}
+          </div>
+        )}
+        {/* 加载中但已有部分应用时显示进度条 */}
+        {loading && appList.length > 0 && scanProgress && scanProgress.total > 0 && (
+          <div className="mb-3 rounded-xl border border-gray-100 bg-white px-4 py-3 dark:border-gray-700/30 dark:bg-gray-800/50">
+            <div className="mb-2 flex items-center justify-between text-sm">
+              <span className="font-medium text-gray-600 dark:text-gray-300">
+                正在扫描应用... {scanProgress.scanned}/{scanProgress.total}
+              </span>
+              <span className="text-xs text-gray-400">
+                已发现 {appList.length} 个
+              </span>
+            </div>
+            <ProgressBar value={scanProgress.scanned / scanProgress.total} />
           </div>
         )}
         {!loading && filtered.length === 0 && (

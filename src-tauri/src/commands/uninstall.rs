@@ -9,6 +9,7 @@
  *
  * 所有扫描命令使用 spawn_blocking 避免阻塞 Tauri 主线程
  */
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
@@ -134,6 +135,20 @@ fn extract_tiff_to_base64_png(tiff_path: &PathBuf) -> String {
 
 /// 事件名称常量
 const EVENT_UNINSTALL_PROGRESS: &str = "uninstall://progress";
+const EVENT_APP_FOUND: &str = "uninstall://app-found";
+const EVENT_APP_SCAN_FINISHED: &str = "uninstall://app-scan-finished";
+
+/// 扫描进度事件载荷（发射给前端）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppScanProgressPayload {
+    /// 当前已扫描数量
+    pub scanned: u64,
+    /// 总数
+    pub total: u64,
+    /// 是否完成
+    pub is_finished: bool,
+}
 
 /// 从 Info.plist 读取的应用元数据
 struct AppMetadata {
@@ -253,21 +268,24 @@ fn calculate_app_size(path: &PathBuf) -> u64 {
 
 /// 扫描已安装应用列表（异步，使用 spawn_blocking）
 /// 参考 lemon-cleaner 的 LMLocalAppListManager.scanAllInstalledApps
+/// 每处理完一个应用就通过事件推送给前端，实现增量显示
 #[tauri::command]
-pub async fn scan_installed_apps() -> Result<Vec<InstalledApp>, String> {
+pub async fn scan_installed_apps(app: AppHandle) -> Result<Vec<InstalledApp>, String> {
     log::info!("[uninstall] 收到扫描已安装应用命令");
     let scan_start = std::time::Instant::now();
+    let app_handle = app.clone();
     Ok(tauri::async_runtime::spawn_blocking(move || {
         let app_dirs = get_application_dirs();
-        log::info!("[uninstall] 发现 {} 个 .app 目录", app_dirs.len());
+        let total = app_dirs.len() as u64;
+        log::info!("[uninstall] 发现 {} 个 .app 目录", total);
         let mut apps = Vec::with_capacity(app_dirs.len());
 
-        for app_path in &app_dirs {
+        for (idx, app_path) in app_dirs.iter().enumerate() {
             let meta = read_app_metadata(app_path);
             let bundle_size = calculate_app_size(app_path);
             let icon_path = extract_app_icon(app_path);
 
-            apps.push(InstalledApp {
+            let installed_app = InstalledApp {
                 id: app_path.display().to_string(),
                 bundle_id: meta.bundle_id,
                 app_name: meta.app_name.clone(),
@@ -284,7 +302,22 @@ pub async fn scan_installed_apps() -> Result<Vec<InstalledApp>, String> {
                 selected_count: 0,
                 file_groups: vec![],
                 is_scan_complete: false,
-            });
+            };
+
+            // 每处理完一个应用就推送前端
+            let _ = app_handle.emit(EVENT_APP_FOUND, &installed_app);
+
+            // 发送扫描进度
+            let _ = app_handle.emit(
+                EVENT_APP_SCAN_FINISHED,
+                AppScanProgressPayload {
+                    scanned: (idx + 1) as u64,
+                    total,
+                    is_finished: idx + 1 == app_dirs.len(),
+                },
+            );
+
+            apps.push(installed_app);
         }
 
         apps.sort_by(|a, b| b.bundle_size.cmp(&a.bundle_size));

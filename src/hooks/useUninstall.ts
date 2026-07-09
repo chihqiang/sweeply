@@ -4,12 +4,15 @@ import {
   scanAppFiles,
   uninstallApp,
   onUninstallProgress,
+  onAppFound,
+  onAppScanProgress,
 } from "@/services/uninstallService";
 import type {
   InstalledApp,
   UninstallResult,
   UninstallProgressEvent,
   AppFileGroup,
+  AppScanProgress,
 } from "@/types/uninstaller";
 import { AppScanType } from "@/types/uninstaller";
 import { TaskStatus } from "@/types/common";
@@ -26,6 +29,8 @@ export interface UseUninstallReturn {
   uninstallResult: UninstallResult | null;
   status: TaskStatus;
   loading: boolean;
+  /** 扫描进度（已处理/总数） */
+  scanProgress: AppScanProgress | null;
   uninstallProgress: UninstallProgressEvent | null;
   error: string | null;
   scanApps: () => Promise<void>;
@@ -57,6 +62,7 @@ export function useUninstall(): UseUninstallReturn {
   const [appList, setAppList] = useState<InstalledApp[]>(() => cacheGet<InstalledApp[]>(CACHE_KEY_APPS) ?? []);
   const [selectedApp, setSelectedApp] = useState<InstalledApp | null>(null);
   const [uninstallProgress, setUninstallProgress] = useState<UninstallProgressEvent | null>(null);
+  const [scanProgress, setScanProgress] = useState<AppScanProgress | null>(null);
   // 如果有缓存数据，初始 loading 为 false（直接展示缓存）
   const [loading, setLoading] = useState<boolean>(appList.length === 0);
   const mountedRef = useRef(true);
@@ -67,19 +73,43 @@ export function useUninstall(): UseUninstallReturn {
   }, []);
 
   const listTask = useAsyncTask(async () => {
-    const apps = await scanInstalledApps();
-    cacheSet(CACHE_KEY_APPS, apps, APP_LIST_TTL);
-    if (mountedRef.current) {
-      setAppList(apps);
-      setLoading(false);
+    // 监听增量推送：每发现一个应用就追加到列表
+    const unlistenAppFound = await onAppFound((app) => {
+      if (!mountedRef.current) return;
+      setAppList((prev) => {
+        // 避免重复
+        if (prev.some((a) => a.id === app.id)) return prev;
+        return [...prev, app];
+      });
+    });
+
+    // 监听扫描进度
+    const unlistenProgress = await onAppScanProgress((progress) => {
+      if (!mountedRef.current) return;
+      setScanProgress(progress);
+    });
+
+    try {
+      const apps = await scanInstalledApps();
+      // 最终使用后端返回的完整排序列表替换（后端按大小排序）
+      cacheSet(CACHE_KEY_APPS, apps, APP_LIST_TTL);
+      if (mountedRef.current) {
+        setAppList(apps);
+        setLoading(false);
+      }
+      return apps;
+    } finally {
+      unlistenAppFound();
+      unlistenProgress();
     }
-    return apps;
   });
 
-  /** 手动刷新：强制重新扫描（删除缓存 → 重新获取） */
+  /** 手动刷新：强制重新扫描（删除缓存 → 清空列表 → 重新获取） */
   const scanApps = useCallback(async () => {
     cacheDelete(CACHE_KEY_APPS);
     setLoading(true);
+    setScanProgress(null);
+    setAppList([]);
     await listTask.execute();
   }, [listTask.execute]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -166,6 +196,7 @@ export function useUninstall(): UseUninstallReturn {
     setAppList([]);
     setSelectedApp(null);
     setUninstallProgress(null);
+    setScanProgress(null);
     setLoading(false);
   }, [listTask.reset, scanTask.reset, uninstallTask.reset]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -188,6 +219,7 @@ export function useUninstall(): UseUninstallReturn {
     uninstallResult,
     status,
     loading,
+    scanProgress,
     uninstallProgress,
     error,
     scanApps,

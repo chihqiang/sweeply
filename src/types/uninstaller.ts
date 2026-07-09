@@ -128,3 +128,13 @@ export interface UninstallResult {
   /** 失败文件数 */
   failedFileCount: number;
 }
+
+/** 应用扫描进度事件（增量推送） */
+export interface AppScanProgress {
+  /** 当前已扫描数量 */
+  scanned: number;
+  /** 总数 */
+  total: number;
+  /** 是否完成 */
+  isFinished: boolean;
+}
