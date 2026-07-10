@@ -10,6 +10,7 @@ export interface KeychainItem {
   id: string;
   title: string;
   kind: string;
+  rawKind: string;
   account: string;
   serverOrService: string;
   modifiedDate: string;

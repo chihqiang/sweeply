@@ -16,6 +16,7 @@ pub struct KeychainItem {
     pub id: String,
     pub title: String,
     pub kind: String,
+    pub raw_kind: String,
     pub account: String,
     pub server_or_service: String,
     pub modified_date: String,

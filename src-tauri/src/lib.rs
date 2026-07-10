@@ -9,7 +9,7 @@ mod models;
 use commands::clean::{scan_clean_files, execute_clean, stop_clean_scan};
 use commands::uninstall::{scan_installed_apps, scan_app_files, uninstall_app};
 use commands::network::{get_network_status, start_speed_test, stop_speed_test};
-use commands::keychain::{open_keychain_access, list_keychains, list_keychain_items, search_keychain_items};
+use commands::keychain::{open_keychain_access, list_keychains, list_keychain_items, search_keychain_items, get_keychain_password, delete_keychain_item};
 use commands::system::{get_system_info, flush_dns};
 use commands::login_items::{list_login_items, add_login_item, remove_login_item, list_background_items};
 use commands::duplicate_files::{scan_duplicates, stop_duplicate_scan, delete_duplicate_files};
@@ -70,6 +70,8 @@ pub fn run() {
             list_keychains,
             list_keychain_items,
             search_keychain_items,
+            get_keychain_password,
+            delete_keychain_item,
             // 系统信息
             get_system_info,
             flush_dns,
