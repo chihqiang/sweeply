@@ -26,6 +26,9 @@ const THRESHOLDS = [
 
 type SortBy = "size-desc" | "size-asc" | "name" | "date-desc";
 
+/** 每组默认展示的文件数，超出则折叠（避免一次性渲染过多 DOM） */
+const GROUP_VISIBLE_LIMIT = 50;
+
 /** 大小阈值选择器 */
 const SizeThresholdSelector = memo(function SizeThresholdSelector({
   minSize,
@@ -285,6 +288,8 @@ export default function LargeFilesPage() {
         detail={progress?.currentPath || undefined}
         onStop={handleStop}
         error={error}
+        scannedCount={progress?.scanned}
+        foundCount={progress?.found}
       />
     );
   }
@@ -425,7 +430,26 @@ export default function LargeFilesPage() {
                 {/* 文件列表 */}
                 {!isCollapsed && (
                   <div className="space-y-0.5 border-t border-gray-100 px-3 py-2 dark:border-gray-700/30">
-                    {extFiles.map((file) => (
+                    {extFiles.slice(0, GROUP_VISIBLE_LIMIT).map((file) => (
+                      <LargeFileRow
+                        key={file.path}
+                        file={file}
+                        isSelected={selectedPaths.has(file.path)}
+                        onToggle={toggleFile}
+                        onLocate={handleLocate}
+                      />
+                    ))}
+                    {extFiles.length > GROUP_VISIBLE_LIMIT && (
+                      <button
+                        onClick={() => toggleExt(ext + "__more")}
+                        className="w-full rounded-lg py-2 text-xs font-medium text-indigo-500 transition-colors hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
+                      >
+                        {collapsedExts.has(ext + "__more")
+                          ? `收起（保留前 ${GROUP_VISIBLE_LIMIT} 项）`
+                          : `显示全部 ${extFiles.length} 项`}
+                      </button>
+                    )}
+                    {collapsedExts.has(ext + "__more") && extFiles.slice(GROUP_VISIBLE_LIMIT).map((file) => (
                       <LargeFileRow
                         key={file.path}
                         file={file}

@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, memo } from "react";
 import {
   useToast,
   Button,
@@ -6,6 +6,7 @@ import {
   ScanIdleView,
   ScanProgressView,
   ScanResultLayout,
+  VirtualList,
 } from "@/components/ui";
 import { scanDiskUsage, scanDiskUsageDetail, stopDiskScan } from "@/services/diskUsageService";
 import type { DiskItem, DiskUsageProgress } from "@/types/diskUsage";
@@ -57,6 +58,51 @@ function Treemap({ items, onItemClick }: { items: DiskItem[]; onItemClick: (item
     </div>
   );
 }
+
+/** 磁盘项行 — 独立 memo 组件，配合虚拟列表使用 */
+const DiskItemRow = memo(function DiskItemRow({
+  item,
+  idx,
+  totalSize,
+  onClick,
+}: {
+  item: DiskItem;
+  idx: number;
+  totalSize: number;
+  onClick: (item: DiskItem) => void;
+}) {
+  const pct = totalSize > 0 ? (item.size / totalSize) * 100 : 0;
+  const barColor = COLORS[idx % COLORS.length];
+  return (
+    <button
+      onClick={() => onClick(item)}
+      className="flex w-full items-center gap-4 px-5 py-3 text-left text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/30"
+    >
+      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-400 dark:bg-gray-700/40">
+        {item.fileCount === 1 && item.children.length === 0 ? (
+          <File className="h-4 w-4" />
+        ) : (
+          <Folder className="h-4 w-4" />
+        )}
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="truncate font-medium text-gray-800 dark:text-gray-200">{item.name}</p>
+        <p className="text-xs text-gray-400">{item.fileCount} 项</p>
+      </div>
+      <div className="w-24 text-right">
+        <p className="font-medium tabular-nums text-gray-800 dark:text-gray-200">{formatFileSize(item.size)}</p>
+      </div>
+      <div className="w-20 text-right">
+        <div className="flex items-center gap-2">
+          <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
+            <div className={cn("h-full rounded-full transition-all", barColor)} style={{ width: `${Math.max(pct, 0.5)}%` }} />
+          </div>
+          <span className="w-12 text-right text-xs tabular-nums text-gray-400">{pct.toFixed(1)}%</span>
+        </div>
+      </div>
+    </button>
+  );
+});
 
 export default function DiskUsagePage() {
   const [scanPath, setScanPath] = useState("");
@@ -138,11 +184,11 @@ export default function DiskUsagePage() {
   const progressPct = useMemo(() => {
     if (!progress) return 0;
     if (progress.total && progress.total > 0) return progress.current / progress.total;
-    return 0; // 统计阶段无 total
+    return 0; // 初始阶段无 total
   }, [progress]);
 
-  // 是否处于统计阶段（total 为 0 表示还在统计文件总数）
-  const isCounting = !!(progress && progress.total === 0);
+  // 是否处于初始阶段（total 为 0 表示刚开始扫描）
+  const isStarting = !!(progress && progress.total === 0);
 
   /* ── 空闲态 — 使用通用组件 ── */
   if (items.length === 0 && !scanning) {
@@ -168,25 +214,25 @@ export default function DiskUsagePage() {
   /* ── 扫描中 — 使用通用组件 ── */
   if (scanning) {
     const countDetail = progress
-      ? isCounting
-        ? `正在统计文件... ${progress.current} 项`
-        : progress.total && progress.total > 0
-          ? `${progress.current} / ${progress.total}`
+      ? isStarting
+        ? `正在启动扫描...`
+        : progressPct > 0
+          ? `已扫描 ${Math.round(progressPct * 100)}%`
           : `已处理 ${progress.current} 项`
       : undefined;
     return (
       <ScanProgressView
-        progress={isCounting ? 0.15 : (progressPct > 0 ? progressPct : 0.3)}
+        progress={isStarting ? 0.05 : (progressPct > 0 ? progressPct : 0.3)}
         centerContent={
           <span className="text-4xl font-bold gradient-text">
-            {isCounting
+            {isStarting
               ? "..."
               : progressPct > 0
                 ? `${Math.round(progressPct * 100)}%`
                 : "..."}
           </span>
         }
-        centerLabel={isCounting ? "统计中" : "分析中"}
+        centerLabel={isStarting ? "启动中" : "分析中"}
         description={countDetail || "正在扫描文件..."}
         detail={progress?.currentPath || undefined}
         onStop={handleStop}
@@ -232,7 +278,7 @@ export default function DiskUsagePage() {
         </div>
       )}
 
-      {/* 列表 */}
+      {/* 列表 — 虚拟化长列表，仅渲染可见项 */}
       {displayItems.length > 0 ? (
         <div className="rounded-xl border border-gray-100 bg-white dark:border-gray-700/30 dark:bg-gray-800/50">
           <div className="border-b border-gray-50 px-5 py-3 text-xs font-medium text-gray-400 dark:border-gray-700/20">
@@ -242,42 +288,21 @@ export default function DiskUsagePage() {
               <span className="w-16 text-right">占比</span>
             </div>
           </div>
-          <div className="divide-y divide-gray-50 dark:divide-gray-700/20">
-            {displayItems.map((item, idx) => {
-              const pct = totalSize > 0 ? (item.size / totalSize) * 100 : 0;
-              const barColor = COLORS[idx % COLORS.length];
-              return (
-                <button
-                  key={item.path}
-                  onClick={() => handleItemClick(item)}
-                  className="flex w-full items-center gap-4 px-5 py-3 text-left text-sm transition-colors hover:bg-gray-50 dark:hover:bg-gray-700/30"
-                >
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-400 dark:bg-gray-700/40">
-                    {item.fileCount === 1 && item.children.length === 0 ? (
-                      <File className="h-4 w-4" />
-                    ) : (
-                      <Folder className="h-4 w-4" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="truncate font-medium text-gray-800 dark:text-gray-200">{item.name}</p>
-                    <p className="text-xs text-gray-400">{item.fileCount} 项</p>
-                  </div>
-                  <div className="w-24 text-right">
-                    <p className="font-medium tabular-nums text-gray-800 dark:text-gray-200">{formatFileSize(item.size)}</p>
-                  </div>
-                  <div className="w-20 text-right">
-                    <div className="flex items-center gap-2">
-                      <div className="h-2 flex-1 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
-                        <div className={cn("h-full rounded-full transition-all", barColor)} style={{ width: `${Math.max(pct, 0.5)}%` }} />
-                      </div>
-                      <span className="w-12 text-right text-xs tabular-nums text-gray-400">{pct.toFixed(1)}%</span>
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
+          <VirtualList
+            itemCount={displayItems.length}
+            itemHeight={60}
+            className="max-h-[60vh]"
+            emptyContent={<EmptyState icon={HardDrive} title="该目录为空" description="选择其他目录进行分析" />}
+          >
+            {(index) => (
+              <DiskItemRow
+                item={displayItems[index]}
+                idx={index}
+                totalSize={totalSize}
+                onClick={handleItemClick}
+              />
+            )}
+          </VirtualList>
         </div>
       ) : (
         <EmptyState icon={HardDrive} title="该目录为空" description="选择其他目录进行分析" />

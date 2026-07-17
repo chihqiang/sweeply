@@ -55,6 +55,8 @@ base64 = "0.22"
 png = "0.17"
 # SHA-256 哈希（重复文件检测）
 sha2 = "0.10"
+# 并行迭代（磁盘扫描、文件遍历性能优化）
+rayon = "1"
 
 [profile.release]
 panic = "abort"

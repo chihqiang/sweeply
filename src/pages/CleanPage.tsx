@@ -54,6 +54,9 @@ const CATEGORY_ICONS: Record<string, typeof HardDrive> = {
 
 type SortBy = "size-desc" | "size-asc" | "name";
 
+/** 子分类默认展示的文件数，超出则折叠（避免一次性渲染过多 DOM） */
+const SUB_VISIBLE_LIMIT = 50;
+
 /** 计算分类总大小（含直接结果和子分类结果） */
 function categoryTotalSize(cat: CleanCategory): number {
   const direct = cat.results.reduce((s, r) => s + r.size, 0);
@@ -185,6 +188,8 @@ const SubcategoryRow = memo(function SubcategoryRow({
   const { selectedCount, selectedSize, allSelected, noneSelected, totalSize } =
     info;
   const hasSelection = selectedCount > 0;
+  const [showAll, setShowAll] = useState(false);
+  const visibleResults = showAll ? sub.results : sub.results.slice(0, SUB_VISIBLE_LIMIT);
 
   return (
     <div className="space-y-1">
@@ -249,15 +254,25 @@ const SubcategoryRow = memo(function SubcategoryRow({
         </div>
       </div>
 
-      {isExpanded && sub.results.length > 0 && (
+      {isExpanded && visibleResults.length > 0 && (
         <div className="ml-7 space-y-0.5 animate-fade-in">
-          {sub.results.map((item) => (
+          {visibleResults.map((item) => (
             <CleanFileRow
               key={item.id}
               item={item}
               onToggle={onToggleItem}
             />
           ))}
+          {sub.results.length > SUB_VISIBLE_LIMIT && (
+            <button
+              onClick={() => setShowAll((v) => !v)}
+              className="w-full rounded-lg py-2 text-xs font-medium text-indigo-500 transition-colors hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
+            >
+              {showAll
+                ? `收起（保留前 ${SUB_VISIBLE_LIMIT} 项）`
+                : `显示全部 ${sub.results.length} 项`}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -276,6 +291,9 @@ const DirectResultsSection = memo(function DirectResultsSection({
   onToggleExpand: () => void;
   onToggleItem: (id: string) => void;
 }) {
+  const [showAll, setShowAll] = useState(false);
+  const visibleResults = showAll ? results : results.slice(0, SUB_VISIBLE_LIMIT);
+
   return (
     <div className="space-y-1">
       <div
@@ -293,13 +311,23 @@ const DirectResultsSection = memo(function DirectResultsSection({
       </div>
       {isExpanded && (
         <div className="space-y-0.5 animate-fade-in">
-          {results.map((item) => (
+          {visibleResults.map((item) => (
             <CleanFileRow
               key={item.id}
               item={item}
               onToggle={onToggleItem}
             />
           ))}
+          {results.length > SUB_VISIBLE_LIMIT && (
+            <button
+              onClick={() => setShowAll((v) => !v)}
+              className="w-full rounded-lg py-2 text-xs font-medium text-indigo-500 transition-colors hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
+            >
+              {showAll
+                ? `收起（保留前 ${SUB_VISIBLE_LIMIT} 项）`
+                : `显示全部 ${results.length} 项`}
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -342,6 +370,7 @@ export default function CleanPage() {
   // 扫描进度 ETA 计算
   const scanStartTimeRef = useRef<number>(0);
   const [eta, setEta] = useState<string>("");
+  const [scanSpeed, setScanSpeed] = useState<number | undefined>(undefined);
 
   const isScanning = status === TaskStatus.Scanning;
   const isProcessing = status === TaskStatus.Processing;
@@ -352,7 +381,10 @@ export default function CleanPage() {
     }
     if (!isScanning) {
       scanStartTimeRef.current = 0;
-      const timer = setTimeout(() => setEta(""), 0);
+      const timer = setTimeout(() => {
+        setEta("");
+        setScanSpeed(undefined);
+      }, 0);
       return () => clearTimeout(timer);
     }
   }, [isScanning]);
@@ -368,6 +400,12 @@ export default function CleanPage() {
       } else if (remaining > 1) {
         setEta(`约 ${Math.ceil(remaining)} 秒`);
       }
+    }
+    // 计算扫描速度（文件/秒）
+    const match = scanProgress.description?.match(/(\d+)\s*个文件/);
+    const count = match ? parseInt(match[1], 10) : 0;
+    if (count > 0 && elapsed > 0) {
+      setScanSpeed(count / elapsed);
     }
   }, [isScanning, scanProgress]);
 
@@ -661,6 +699,9 @@ export default function CleanPage() {
         onStop={() => void stopScan()}
         stopLabel="停止扫描"
         error={error}
+        scanSpeed={scanSpeed}
+        steps={isScanning ? ["扫描系统", "扫描应用", "扫描浏览器", "扫描开发工具"] : undefined}
+        currentStep={isScanning ? Math.min(3, Math.floor(smoothProgress * 4)) : undefined}
       />
     );
   }

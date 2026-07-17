@@ -342,3 +342,104 @@ pub fn flush_dns() -> Result<String, String> {
         Err(format!("DNS 刷新失败: {}", msg))
     }
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+//  权限检查
+// ────────────────────────────────────────────────────────────────────────────
+
+/// 权限检查结果
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionStatus {
+    /// 是否拥有完全磁盘访问权限
+    pub has_full_disk_access: bool,
+    /// 是否可以访问用户桌面目录
+    pub can_access_desktop: bool,
+    /// 是否可以访问用户下载目录
+    pub can_access_downloads: bool,
+    /// 是否可以访问用户文档目录
+    pub can_access_documents: bool,
+    /// 是否可以访问 /Library 目录（需要完全磁盘访问权限）
+    pub can_access_library: bool,
+    /// 缺失的权限列表（用于前端展示提示）
+    pub missing_permissions: Vec<String>,
+}
+
+/// 检查应用是否拥有必要的系统权限
+///
+/// macOS 上，某些清理操作需要"完全磁盘访问权限"才能访问
+/// ~/Library/Caches、~/Library/Application Support 绻目录。
+/// 此命令通过尝试读取关键目录来判断权限状态。
+#[tauri::command]
+pub fn check_permissions() -> Result<PermissionStatus, String> {
+    log::info!("[system] 检查系统权限...");
+
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+
+    // 检查用户目录访问权限（通常不需要特殊权限）
+    let desktop_path = home.join("Desktop");
+    let downloads_path = home.join("Downloads");
+    let documents_path = home.join("Documents");
+
+    let can_access_desktop = can_read_dir(&desktop_path);
+    let can_access_downloads = can_read_dir(&downloads_path);
+    let can_access_documents = can_read_dir(&documents_path);
+
+    // 检查 ~/Library 访问权限（需要完全磁盘访问权限）
+    let library_path = home.join("Library");
+    let can_access_library = can_read_dir(&library_path);
+
+    // 完全磁盘访问权限：能读取 ~/Library 通常意味着已授权
+    // 更精确的检查：尝试读取 ~/Library/Caches（TCC 保护目录）
+    let caches_path = home.join("Library/Caches");
+    let can_access_caches = can_read_dir(&caches_path);
+    let has_full_disk_access = can_access_library && can_access_caches;
+
+    let mut missing: Vec<String> = Vec::new();
+    if !has_full_disk_access {
+        missing.push("完全磁盘访问权限".to_string());
+    }
+    if !can_access_desktop {
+        missing.push("桌面目录访问".to_string());
+    }
+    if !can_access_downloads {
+        missing.push("下载目录访问".to_string());
+    }
+    if !can_access_documents {
+        missing.push("文档目录访问".to_string());
+    }
+
+    log::info!(
+        "[system] 权限检查完成: 完全磁盘访问={}, 缺失={:?}",
+        has_full_disk_access,
+        missing
+    );
+
+    Ok(PermissionStatus {
+        has_full_disk_access,
+        can_access_desktop,
+        can_access_downloads,
+        can_access_documents,
+        can_access_library,
+        missing_permissions: missing,
+    })
+}
+
+/// 尝试读取目录，判断是否有访问权限
+fn can_read_dir(path: &std::path::Path) -> bool {
+    std::fs::read_dir(path).is_ok()
+}
+
+/// 打开 macOS 系统设置 — 隐私与安全性 > 完全磁盘访问权限
+#[tauri::command]
+pub fn open_system_settings() -> Result<(), String> {
+    log::info!("[system] 打开系统设置：完全磁盘访问权限");
+    std::process::Command::new("open")
+        .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+        .output()
+        .map_err(|e| {
+            log::error!("[system] 打开系统设置失败: {}", e);
+            format!("打开系统设置失败: {}", e)
+        })?;
+    Ok(())
+}

@@ -269,6 +269,7 @@ export default function DuplicateFilesPage() {
     const countDetail = progress && progress.total > 0
       ? `${progress.current} / ${progress.total}`
       : undefined;
+    const isHashingPhase = progress?.phase?.includes("哈希") ?? false;
     return (
       <ScanProgressView
         progress={progressValue}
@@ -282,6 +283,9 @@ export default function DuplicateFilesPage() {
         detail={progress?.currentPath || countDetail}
         onStop={handleStop}
         error={error}
+        scannedCount={progress?.current}
+        steps={["扫描文件", "计算哈希", "汇总结果"]}
+        currentStep={isHashingPhase ? 1 : (progress?.phase === "完成" ? 2 : 0)}
       />
     );
   }

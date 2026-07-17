@@ -10,3 +10,6 @@ export { useResizableSidebar } from "./useResizableSidebar";
 export { useSpeedHistory } from "./useSpeedHistory";
 export { useKeychain, type UseKeychainReturn } from "./useKeychain";
 export { usePageData } from "./usePageData";
+export { useVirtualList } from "./useVirtualList";
+export { usePermissionCheck } from "./usePermissionCheck";
+export type { PermissionStatus } from "./usePermissionCheck";

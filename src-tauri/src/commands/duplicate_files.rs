@@ -10,6 +10,8 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
 
+use rayon::prelude::*;
+
 fn cancel_flag() -> &'static Arc<AtomicBool> {
     static FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     FLAG.get_or_init(|| Arc::new(AtomicBool::new(false)))
@@ -112,7 +114,7 @@ pub async fn scan_duplicates(
             current_path: String::new(),
         }).ok();
 
-        // 第二阶段：对同大小文件计算哈希
+        // 第二阶段：对同大小文件并行计算哈希
         let mut hash_groups: HashMap<String, Vec<DuplicateFile>> = HashMap::new();
         let same_size_groups: Vec<Vec<PathBuf>> = size_map.into_values().filter(|v| v.len() > 1).collect();
         let total_groups = same_size_groups.len() as u64;
@@ -136,38 +138,41 @@ pub async fn scan_duplicates(
                 }).ok();
             }
 
-            // 取第一个文件的哈希作为参考，后续文件与之比较
-            let first = match group.first() {
-                Some(f) => f.clone(),
-                None => continue,
-            };
-            let first_hash = match compute_hash(&first) {
-                Some(h) => h,
-                None => continue,
-            };
-
-            let mut dup_files: Vec<DuplicateFile> = Vec::new();
-
-            for file_path in &group {
-                if let Some(hash) = compute_hash(file_path) {
-                    if hash == first_hash {
-                        dup_files.push(DuplicateFile {
-                            path: file_path.to_string_lossy().to_string(),
-                            name: file_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-                            modified: file_path.metadata().ok()
-                                .and_then(|m| m.modified().ok())
-                                .map(|t| {
-                                    let d: chrono::DateTime<chrono::Local> = t.into();
-                                    d.format("%Y-%m-%d %H:%M").to_string()
-                                })
-                                .unwrap_or_default(),
-                        });
+            // 使用 rayon 并行计算该组内所有文件的哈希
+            let hashed: Vec<(PathBuf, Option<String>)> = group
+                .par_iter()
+                .map(|file_path| {
+                    if flag.load(Ordering::SeqCst) {
+                        return (file_path.clone(), None);
                     }
+                    (file_path.clone(), compute_hash(file_path))
+                })
+                .collect();
+
+            // 找出有相同哈希的文件
+            let mut hash_map: HashMap<String, Vec<DuplicateFile>> = HashMap::new();
+            for (file_path, hash_opt) in hashed {
+                if let Some(hash) = hash_opt {
+                    let dup_file = DuplicateFile {
+                        path: file_path.to_string_lossy().to_string(),
+                        name: file_path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                        modified: file_path.metadata().ok()
+                            .and_then(|m| m.modified().ok())
+                            .map(|t| {
+                                let d: chrono::DateTime<chrono::Local> = t.into();
+                                d.format("%Y-%m-%d %H:%M").to_string()
+                            })
+                            .unwrap_or_default(),
+                    };
+                    hash_map.entry(hash).or_default().push(dup_file);
                 }
             }
 
-            if dup_files.len() > 1 {
-                hash_groups.entry(first_hash.clone()).or_insert(dup_files);
+            // 将含多个文件的哈希组合并到结果
+            for (hash, files) in hash_map {
+                if files.len() > 1 {
+                    hash_groups.entry(hash).or_default().extend(files);
+                }
             }
         }
 
