@@ -187,10 +187,11 @@ pub async fn scan_disk_usage(
     path: String,
 ) -> Result<Vec<DiskItem>, String> {
     log::info!("[disk_usage] 收到扫描磁盘使用命令: path={}", path);
+    // 命令入口处重置取消标志，避免 stop 与 reset 的竞态丢失取消请求
+    cancel_flag().store(false, Ordering::SeqCst);
 
     tauri::async_runtime::spawn_blocking(move || {
         let scan_start = std::time::Instant::now();
-        cancel_flag().store(false, Ordering::SeqCst);
         let flag = cancel_flag();
         let root = PathBuf::from(&path);
 
@@ -242,6 +243,8 @@ pub fn scan_disk_usage_detail(path: String) -> Result<DiskItem, String> {
     log::info!("[disk_usage] 收到扫描目录详情命令: path={}", path);
     let scan_start = std::time::Instant::now();
     let root = PathBuf::from(&path);
+    // 详情扫描不是长任务，无需与主扫描共享取消状态，先复位避免残留的取消标志
+    cancel_flag().store(false, Ordering::SeqCst);
 
     if !root.exists() {
         log::error!("[disk_usage] 路径不存在: {}", path);

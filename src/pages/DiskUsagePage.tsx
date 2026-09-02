@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, memo } from "react";
+import { useState, useCallback, useMemo, useRef, memo } from "react";
 import {
   useToast,
   Button,
@@ -113,6 +113,8 @@ export default function DiskUsagePage() {
   const [progress, setProgress] = useState<DiskUsageProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
   const { addToast } = useToast();
+  // 请求序号：防止快速点击时旧请求结果覆盖新请求
+  const detailSeqRef = useRef(0);
 
   const handleSelectPath = useCallback(async () => {
     try {
@@ -157,26 +159,34 @@ export default function DiskUsagePage() {
 
   const handleItemClick = useCallback(async (item: DiskItem) => {
     if (item.fileCount === 1 && item.children.length === 0) return;
+    const seq = ++detailSeqRef.current;
     setHistory((prev) => [...prev, item]);
     setDetail(null);
     try {
       const result = await scanDiskUsageDetail(item.path);
-      setDetail(result);
+      if (seq === detailSeqRef.current) setDetail(result);
     } catch (e) {
-      addToast({ type: "error", message: `读取失败: ${e}` });
+      if (seq === detailSeqRef.current) addToast({ type: "error", message: `读取失败: ${e}` });
     }
   }, [addToast]);
 
   const handleBack = useCallback(() => {
     const prev = [...history];
     prev.pop();
+    const seq = ++detailSeqRef.current;
     setHistory(prev);
-    if (prev.length === 0) {
-      setDetail(null);
-    } else {
-      handleItemClick(prev[prev.length - 1]);
+    setDetail(null);
+    if (prev.length > 0) {
+      const target = prev[prev.length - 1];
+      scanDiskUsageDetail(target.path)
+        .then((result) => {
+          if (seq === detailSeqRef.current) setDetail(result);
+        })
+        .catch((e) => {
+          if (seq === detailSeqRef.current) addToast({ type: "error", message: `读取失败: ${e}` });
+        });
     }
-  }, [history, handleItemClick]);
+  }, [history, addToast]);
 
   const displayItems = detail ? detail.children : items;
   const totalSize = detail ? detail.size : items.reduce((s, i) => s + i.size, 0);

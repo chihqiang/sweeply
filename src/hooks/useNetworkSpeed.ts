@@ -64,11 +64,13 @@ export function useNetworkSpeed(): UseNetworkSpeedReturn {
 
   const testTask = useAsyncTask(async () => {
     setProgress(null);
-    const unlisten = await onSpeedTestProgress((event) => setProgress(event));
+    const unlisten = await onSpeedTestProgress((event) => {
+      if (mountedRef.current) setProgress(event);
+    });
     try {
       return await startSpeedTest();
     } finally {
-      unlisten();
+      if (mountedRef.current) unlisten();
     }
   });
 

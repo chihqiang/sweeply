@@ -39,6 +39,7 @@ import type {
   CleanCategory,
   CleanSubcategory,
   CleanResultItem,
+  CleanMethod,
 } from "@/types/clean";
 
 /* ───────────────────────── 常量 & 工具 ───────────────────────── */
@@ -424,6 +425,7 @@ export default function CleanPage() {
   const {
     selectedIds,
     sizes,
+    methods,
     totalSelected,
     sortedCategories,
     subInfoMap,
@@ -432,6 +434,7 @@ export default function CleanPage() {
   } = useMemo(() => {
     const ids: string[] = [];
     const szs: number[] = [];
+    const meths: CleanMethod[] = [];
     let total = 0;
     const subMap = new Map<
       string,
@@ -463,6 +466,7 @@ export default function CleanPage() {
       return {
         selectedIds: ids,
         sizes: szs,
+        methods: meths,
         totalSelected: total,
         sortedCategories: [],
         subInfoMap: subMap,
@@ -491,6 +495,7 @@ export default function CleanPage() {
         if (item.selected) {
           ids.push(item.id);
           szs.push(item.size);
+          meths.push(item.cleanMethod);
           total += item.size;
         }
       }
@@ -505,6 +510,7 @@ export default function CleanPage() {
             sz += item.size;
             ids.push(item.id);
             szs.push(item.size);
+            meths.push(item.cleanMethod);
           }
         }
         total += sz;
@@ -572,6 +578,7 @@ export default function CleanPage() {
     return {
       selectedIds: ids,
       sizes: szs,
+      methods: meths,
       totalSelected: total,
       sortedCategories: sorted,
       subInfoMap: subMap,
@@ -617,7 +624,7 @@ export default function CleanPage() {
   const handleClean = useCallback(async () => {
     setConfirmOpen(false);
     try {
-      await executeCleanAction(selectedIds, sizes);
+      await executeCleanAction(selectedIds, sizes, methods);
       addToast({
         type: "success",
         message: `已释放 ${formatFileSize(totalSelected)}，清理 ${selectedIds.length} 个文件`,
@@ -625,7 +632,7 @@ export default function CleanPage() {
     } catch {
       addToast({ type: "error", message: "清理失败" });
     }
-  }, [selectedIds, sizes, executeCleanAction, totalSelected, addToast]);
+  }, [selectedIds, sizes, methods, executeCleanAction, totalSelected, addToast]);
 
   const smoothProgress = useSmoothProgress(
     (isScanning || isProcessing) ? (scanProgress?.progress ?? 0) : null,

@@ -14,6 +14,7 @@
  * - 上传测速：流式发送 chunk，每个 chunk 发送实时进度和速度 (0.55 ~ 0.95)
  * - 完成：1.0
  */
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -22,13 +23,36 @@ use futures_util::stream::{self, StreamExt};
 
 use crate::models::network::*;
 
-static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+/// 测速取消标志：`stop_speed_test` 设置后，测速流程在检查点中止。
+static SPEED_TEST_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+fn speed_test_cancelled() -> bool {
+    SPEED_TEST_CANCELLED.load(Ordering::SeqCst)
+}
+
+fn reset_speed_cancel() {
+    SPEED_TEST_CANCELLED.store(false, Ordering::SeqCst);
+}
+
+fn mark_speed_cancel() {
+    SPEED_TEST_CANCELLED.store(true, Ordering::SeqCst);
+}
+
+static HTTP_CLIENT: LazyLock<Result<reqwest::Client, String>> = LazyLock::new(|| {
     reqwest::Client::builder()
         .user_agent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
         .timeout(Duration::from_secs(30))
         .build()
-        .expect("创建全局 HTTP 客户端失败")
+        .map_err(|e| format!("创建全局 HTTP 客户端失败: {}", e))
 });
+
+/// 获取全局 HTTP 客户端；初始化失败时返回错误（而非 panic）。
+fn http_client() -> Result<&'static reqwest::Client, String> {
+    match &*HTTP_CLIENT {
+        Ok(client) => Ok(client),
+        Err(e) => Err(e.clone()),
+    }
+}
 
 fn emit_speed_progress(app: &AppHandle, phase: SpeedTestPhase, progress: f64, current_speed: u64, direction: SpeedDirection) {
     let _ = app.emit(EVENT_SPEED_TEST_PROGRESS, SpeedTestProgressPayload {
@@ -174,8 +198,12 @@ pub async fn get_network_status() -> Result<NetworkStatus, String> {
 
 /// 检测网络连通性：依次尝试中国友好的服务器，任一成功即返回 true
 async fn check_connectivity() -> bool {
+    let Ok(client) = http_client() else {
+        log::error!("[network] 无法创建 HTTP 客户端，跳过连通性检测");
+        return false;
+    };
     for url in CONNECTIVITY_URLS {
-        match HTTP_CLIENT.get(*url).timeout(Duration::from_secs(3)).send().await {
+        match client.get(*url).timeout(Duration::from_secs(3)).send().await {
             Ok(resp) => {
                 log::debug!("[network] 连通性检测成功: {} -> {}", url, resp.status());
                 return true;
@@ -190,9 +218,10 @@ async fn check_connectivity() -> bool {
 
 /// 尝试延迟测试，依次尝试 URL 列表，返回第一个成功的延迟（毫秒）
 async fn measure_latency_once() -> Option<u64> {
+    let client = http_client().ok()?;
     for url in LATENCY_TEST_URLS {
         let start = Instant::now();
-        match HTTP_CLIENT.get(*url).timeout(Duration::from_secs(5)).send().await {
+        match client.get(*url).timeout(Duration::from_secs(5)).send().await {
             Ok(resp) => {
                 let elapsed = start.elapsed().as_millis() as u64;
                 let _ = resp.bytes().await;
@@ -206,9 +235,10 @@ async fn measure_latency_once() -> Option<u64> {
 
 /// 尝试下载测速连接，依次尝试 URL 列表，返回第一个成功的响应流
 async fn try_download_connect() -> Result<reqwest::Response, String> {
+    let client = http_client()?;
     for url in DOWNLOAD_URLS {
         log::debug!("[network] 尝试下载测速 URL: {}", url);
-        match HTTP_CLIENT
+        match client
             .get(*url)
             .header("Range", format!("bytes=0-{}", DOWNLOAD_TOTAL_BYTES - 1))
             .timeout(Duration::from_secs(15))
@@ -239,7 +269,7 @@ async fn try_upload(app: &AppHandle) -> Result<u64, String> {
     let upload_stream = stream::unfold(0u64, move |offset| {
         let app = app_for_stream.clone();
         async move {
-            if offset >= UPLOAD_TOTAL_BYTES {
+            if offset >= UPLOAD_TOTAL_BYTES || speed_test_cancelled() {
                 return None;
             }
             let end = (offset + UPLOAD_CHUNK_SIZE as u64).min(UPLOAD_TOTAL_BYTES);
@@ -268,52 +298,53 @@ async fn try_upload(app: &AppHandle) -> Result<u64, String> {
         }
     });
 
-    for url in UPLOAD_URLS {
-        log::debug!("[network] 尝试上传测速 URL: {}", url);
+    // 上传 stream 消费后不可复用，当前仅支持一个上传 URL
+    let url = UPLOAD_URLS.first().ok_or("未配置上传测速服务器")?;
+    log::debug!("[network] 尝试上传测速 URL: {}", url);
 
-        // 为每次尝试创建新的 stream（stream 消费后不可复用）
-        let body = reqwest::Body::wrap_stream(upload_stream);
-        // Note: wrap_stream 消费了 upload_stream，后续无法重试
-        // 当前只有一个上传 URL，如需多 URL 回退需要重构为每次创建新 stream
+    // 为本次上传创建 stream
+    let body = reqwest::Body::wrap_stream(upload_stream);
 
-        match HTTP_CLIENT
-            .post(*url)
-            .body(body)
-            .header("Content-Type", "application/octet-stream")
-            .timeout(Duration::from_secs(20))
-            .send()
-            .await
-        {
-            Ok(_) => {
-                let elapsed = upload_start.elapsed().as_secs_f64();
-                let speed = if elapsed > 0.0 {
-                    (UPLOAD_TOTAL_BYTES as f64 / elapsed * 8.0) as u64
-                } else {
-                    0
-                };
-                log::info!("[network] 上传测速成功: {} -> {} bps", url, speed);
-                return Ok(speed);
-            }
-            Err(e) => {
-                log::warn!("[network] 上传测速 URL 失败: {} -> {}", url, e);
-                return Err(format!("上传测速失败: {}", e));
-            }
+    match http_client()?
+        .post(*url)
+        .body(body)
+        .header("Content-Type", "application/octet-stream")
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+    {
+        Ok(_) => {
+            let elapsed = upload_start.elapsed().as_secs_f64();
+            let speed = if elapsed > 0.0 {
+                (UPLOAD_TOTAL_BYTES as f64 / elapsed * 8.0) as u64
+            } else {
+                0
+            };
+            log::info!("[network] 上传测速成功: {} -> {} bps", url, speed);
+            return Ok(speed);
+        }
+        Err(e) => {
+            log::warn!("[network] 上传测速 URL 失败: {} -> {}", url, e);
+            return Err(format!("上传测速失败: {}", e));
         }
     }
-
-    Err("所有上传测速服务器均不可达".to_string())
 }
 
 /// 开始网络测速（异步）
 #[tauri::command]
 pub async fn start_speed_test(app: AppHandle) -> Result<SpeedTestResult, String> {
     log::info!("[network] ===== 开始网络测速 =====");
+    reset_speed_cancel();
 
     // ── 阶段 1: 延迟测试 (0.00 ~ 0.10) ──
     emit_speed_progress(&app, SpeedTestPhase::Latency, PHASE_LATENCY_START, 0, SpeedDirection::Download);
 
     let mut latencies = vec![];
     for i in 0..5 {
+        if speed_test_cancelled() {
+            log::info!("[network] 延迟测试阶段被取消");
+            return Err("测速已取消".to_string());
+        }
         match measure_latency_once().await {
             Some(elapsed) => {
                 latencies.push(elapsed);
@@ -354,6 +385,11 @@ pub async fn start_speed_test(app: AppHandle) -> Result<SpeedTestResult, String>
     // ── 阶段 2: 下载测速 (0.10 ~ 0.55) ── 流式读取 chunk，实时发送进度
     emit_speed_progress(&app, SpeedTestPhase::Download, PHASE_DOWNLOAD_START, 0, SpeedDirection::Download);
 
+    if speed_test_cancelled() {
+        log::info!("[network] 下载测速阶段前被取消");
+        return Err("测速已取消".to_string());
+    }
+
     let download_response = try_download_connect().await?;
     let download_start = Instant::now();
 
@@ -362,6 +398,10 @@ pub async fn start_speed_test(app: AppHandle) -> Result<SpeedTestResult, String>
     let mut stream = download_response.bytes_stream();
 
     while let Some(chunk_result) = stream.next().await {
+        if speed_test_cancelled() {
+            log::info!("[network] 下载测速阶段被取消 (已接收 {} 字节)", received);
+            return Err("测速已取消".to_string());
+        }
         let chunk = chunk_result.map_err(|e| {
             log::error!("[network] 下载测速读取数据失败: {}", e);
             e.to_string()
@@ -413,6 +453,11 @@ pub async fn start_speed_test(app: AppHandle) -> Result<SpeedTestResult, String>
     // ── 阶段 3: 上传测速 (0.55 ~ 0.95) ── 流式发送 chunk，实时发送进度
     emit_speed_progress(&app, SpeedTestPhase::Upload, PHASE_UPLOAD_START, 0, SpeedDirection::Upload);
 
+    if speed_test_cancelled() {
+        log::info!("[network] 上传测速阶段前被取消");
+        return Err("测速已取消".to_string());
+    }
+
     let upload_speed = match try_upload(&app).await {
         Ok(speed) => speed,
         Err(e) => {
@@ -451,7 +496,6 @@ pub async fn start_speed_test(app: AppHandle) -> Result<SpeedTestResult, String>
 #[tauri::command]
 pub fn stop_speed_test() -> Result<(), String> {
     log::info!("[network] 用户请求停止测速");
-    // 当前测速在单个 async 命令中执行，无法中断。
-    // 后续可拆分为后台任务 + 取消令牌模式实现真正取消
+    mark_speed_cancel();
     Ok(())
 }

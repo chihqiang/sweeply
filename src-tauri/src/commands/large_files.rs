@@ -1,15 +1,35 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
 
 fn cancel_flag() -> &'static Arc<AtomicBool> {
     static FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     FLAG.get_or_init(|| Arc::new(AtomicBool::new(false)))
+}
+
+/// 最近一次扫描返回的文件路径集合，删除命令据此校验路径来源（拒绝删除未扫描过的路径）
+fn scanned_file_paths() -> &'static Mutex<Option<HashSet<PathBuf>>> {
+    static REGISTRY: OnceLock<Mutex<Option<HashSet<PathBuf>>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(None))
+}
+
+fn remember_scanned_paths(paths: impl IntoIterator<Item = PathBuf>) {
+    if let Ok(mut guard) = scanned_file_paths().lock() {
+        *guard = Some(paths.into_iter().collect());
+    }
+}
+
+fn is_scanned_path(path: &Path) -> bool {
+    scanned_file_paths()
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|set| set.contains(path)))
+        .unwrap_or(false)
 }
 
 const EVENT_PROGRESS: &str = "largefile://progress";
@@ -42,13 +62,14 @@ pub async fn scan_large_files(
     min_size_mb: u64,
 ) -> Result<Vec<LargeFile>, String> {
     log::info!("[large_files] 收到扫描大文件命令: path={}, min_size={}MB", path, min_size_mb);
+    // 命令入口处重置取消标志，避免 stop 与 reset 的竞态丢失取消请求
+    cancel_flag().store(false, Ordering::SeqCst);
 
     tauri::async_runtime::spawn_blocking(move || {
         let scan_start = std::time::Instant::now();
-        cancel_flag().store(false, Ordering::SeqCst);
         let flag = cancel_flag();
         let root = PathBuf::from(&path);
-        let min_bytes = min_size_mb * 1024 * 1024;
+        let min_bytes = min_size_mb.saturating_mul(1024 * 1024);
 
         if !root.exists() {
             log::error!("[large_files] 路径不存在: {}", path);
@@ -126,6 +147,9 @@ pub async fn scan_large_files(
             current_path: String::new(),
         }).ok();
 
+        // 记录本次扫描返回的路径，供删除命令做来源校验
+        remember_scanned_paths(files.iter().map(|f| PathBuf::from(&f.path)));
+
         Ok(files)
     })
     .await
@@ -147,7 +171,14 @@ pub fn delete_large_files(paths: Vec<String>) -> Result<Vec<String>, String> {
     log::info!("[large_files] 收到删除大文件命令: {} 个文件", paths.len());
     let mut failed: Vec<String> = Vec::new();
     for path in &paths {
-        match trash::delete(PathBuf::from(path)) {
+        let pb = PathBuf::from(path);
+        // 路径来源校验：仅允许删除最近一次扫描返回过的文件
+        if !is_scanned_path(&pb) {
+            log::error!("[large_files] 拒绝删除未扫描过的路径: {}", path);
+            failed.push(format!("{} (路径不在扫描结果中)", path));
+            continue;
+        }
+        match trash::delete(pb) {
             Ok(_) => {
                 log::debug!("[large_files] 删除成功: {}", path);
             }

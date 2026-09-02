@@ -1,4 +1,4 @@
-import { useState, useRef, type ReactNode } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import { cn } from "@/utils/cn";
 
 export interface TooltipProps {
@@ -18,6 +18,12 @@ const SIDE_CLASSES: Record<string, string> = {
 export function Tooltip({ content, children, side = "bottom", className }: TooltipProps) {
   const [show, setShow] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  // 组件卸载时清理未触发的展示定时器
+  useEffect(() => {
+    const timer = timerRef.current;
+    return () => clearTimeout(timer);
+  }, []);
 
   const handleEnter = () => {
     timerRef.current = setTimeout(() => setShow(true), 300);

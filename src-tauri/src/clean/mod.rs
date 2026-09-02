@@ -45,7 +45,40 @@ pub use scanner::DirScanner;
 #[allow(unused_imports)]
 pub use traits::{ScanCategory, ScanTarget, Target};
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
 use crate::models::clean::{CleanCategory, CleanScanSummary};
+
+// ────────────────────────────────────────────────────────────────────────────
+//  扫描路径注册表 — 清理前的路径来源校验
+// ────────────────────────────────────────────────────────────────────────────
+
+/// 最近一次扫描产生的可清理路径集合。
+///
+/// 清理命令只允许删除此集合中的路径，防止被前端传入的任意路径滥用
+/// （配合 Full Disk Access 权限，若不做校验，XSS/恶意 JS 可删除任意文件）。
+fn scanned_clean_paths() -> &'static Mutex<Option<HashSet<PathBuf>>> {
+    static REGISTRY: OnceLock<Mutex<Option<HashSet<PathBuf>>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(None))
+}
+
+/// 记录本次扫描产生的可清理路径（每次扫描后调用，替换旧集合）。
+pub fn remember_clean_paths(paths: impl IntoIterator<Item = PathBuf>) {
+    if let Ok(mut guard) = scanned_clean_paths().lock() {
+        *guard = Some(paths.into_iter().collect());
+    }
+}
+
+/// 校验路径是否来自最近一次扫描的结果。非法路径返回 `false`，清理器将拒绝删除。
+pub fn is_known_clean_path(path: &Path) -> bool {
+    scanned_clean_paths()
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|set| set.contains(path)))
+        .unwrap_or(false)
+}
 
 // ────────────────────────────────────────────────────────────────────────────
 //  CleanEngine — 扫描引擎
@@ -108,7 +141,8 @@ impl CleanEngine {
         let scan_start = std::time::Instant::now();
         log::info!("[clean] 开始扫描垃圾文件...");
 
-        cancel.reset();
+        // 注：取消标志已在命令入口处重置（scan_clean_files），
+        // 此处不再 reset，避免清除扫描启动瞬间用户发起的取消请求。
 
         if cancel.is_cancelled() {
             log::warn!("[clean] 扫描在开始前即被取消");
@@ -187,6 +221,20 @@ impl CleanEngine {
         }
 
         emitter.emit(1.0, "扫描完成");
+
+        // 记录本次扫描的可清理路径（供清理命令做来源校验）
+        let known_paths: Vec<PathBuf> = categories_result
+            .iter()
+            .flat_map(|cat| {
+                cat.results
+                    .iter()
+                    .map(|r| PathBuf::from(&r.path))
+                    .chain(cat.subcategories.iter().flat_map(|sub| {
+                        sub.results.iter().map(|r| PathBuf::from(&r.path))
+                    }))
+            })
+            .collect();
+        remember_clean_paths(known_paths);
 
         let elapsed = scan_start.elapsed();
         log::info!(

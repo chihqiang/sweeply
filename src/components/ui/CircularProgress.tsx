@@ -26,7 +26,8 @@ export const CircularProgress = memo(function CircularProgress({
   const circumference = 2 * Math.PI * radius;
   const offset = circumference * (1 - clamped);
   const center = size / 2;
-  const gradientId = useId();
+  // React useId 可能包含 ':'，作为 SVG url(#...) 引用和 CSS 选择器时无效，需去除
+  const gradientId = `cp-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
 
   return (
     <div className={cn("relative inline-flex items-center justify-center", className)} style={{ width: size, height: size }}>

@@ -13,7 +13,7 @@ const CMD_SCAN_APP_FILES = "scan_app_files";
 const CMD_UNINSTALL_APP = "uninstall_app";
 const EVENT_UNINSTALL_PROGRESS = "uninstall://progress";
 const EVENT_APP_FOUND = "uninstall://app-found";
-const EVENT_APP_SCAN_FINISHED = "uninstall://app-scan-finished";
+const EVENT_APP_SCAN_PROGRESS = "uninstall://app-scan-progress";
 
 export async function scanInstalledApps(): Promise<InstalledApp[]> {
   return invoke<InstalledApp[]>(CMD_SCAN_APPS);
@@ -53,11 +53,11 @@ export async function onAppFound(
   });
 }
 
-/** 监听扫描进度（已处理/总数） */
+/** 监听应用扫描进度（已处理/总数） */
 export async function onAppScanProgress(
   callback: (progress: AppScanProgress) => void,
 ): Promise<UnlistenFn> {
-  return listen<AppScanProgress>(EVENT_APP_SCAN_FINISHED, (event) => {
+  return listen<AppScanProgress>(EVENT_APP_SCAN_PROGRESS, (event) => {
     callback(event.payload);
   });
 }

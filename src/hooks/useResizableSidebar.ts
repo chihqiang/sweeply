@@ -6,14 +6,19 @@ const STORAGE_KEY = "sweeply-sidebar-width";
 const DEFAULT_WIDTH = 240;
 
 function readStoredWidth(): number {
-  const stored = localStorage.getItem(STORAGE_KEY);
-  const w = stored ? parseInt(stored, 10) : DEFAULT_WIDTH;
-  return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w));
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    const w = stored ? parseInt(stored, 10) : DEFAULT_WIDTH;
+    return Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, w || DEFAULT_WIDTH));
+  } catch {
+    return DEFAULT_WIDTH;
+  }
 }
 
 export function useResizableSidebar() {
   const [width, setWidth] = useState(readStoredWidth);
   const draggingRef = useRef(false);
+  const widthRef = useRef(width);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -21,6 +26,10 @@ export function useResizableSidebar() {
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
   }, []);
+
+  useEffect(() => {
+    widthRef.current = width;
+  }, [width]);
 
   useEffect(() => {
     const onMouseMove = (e: MouseEvent) => {
@@ -34,10 +43,12 @@ export function useResizableSidebar() {
         draggingRef.current = false;
         document.body.style.cursor = "";
         document.body.style.userSelect = "";
-        setWidth((w) => {
-          localStorage.setItem(STORAGE_KEY, String(w));
-          return w;
-        });
+        // 在 updater 之外持久化最新宽度（避免 updater 内含副作用被 StrictMode 双调用）
+        try {
+          localStorage.setItem(STORAGE_KEY, String(widthRef.current));
+        } catch {
+          /* 存储不可用时忽略 */
+        }
       }
     };
 

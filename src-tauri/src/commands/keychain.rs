@@ -23,27 +23,40 @@ fn run_security(args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
+/// 从形如 `"..."=value` 或 `0x... "value"` 的片段中提取带引号的值。
+///
+/// 通过 `char_indices` 定位引号，避免直接字节切片导致的多字节 UTF-8 字符边界 panic。
+/// 从形如 `"..."=value` 或 `0x... "value"` 的片段中提取带引号的值。
+///
+/// 通过 `find`/`get` 在字符边界上切片，避免直接字节切片导致的多字节 UTF-8 panic。
 fn extract_quoted_value(s: &str) -> Option<String> {
     let eq_pos = s.find('=')?;
     let after_eq = s[eq_pos + 1..].trim();
     if after_eq.starts_with('"') {
-        let remaining = &after_eq[1..];
-        // use rfind to handle octal escapes like \000 inside quoted strings
-        if let Some(end) = remaining.rfind('"') {
-            return Some(remaining[..end].to_string());
-        }
+        // 去掉开头的引号后找闭合引号
+        return quoted_content(after_eq.strip_prefix('"')?);
     }
     if after_eq.starts_with("0x") {
         let rest = after_eq.trim_start_matches(|c: char| c.is_alphanumeric() || c == 'x');
         let rest = rest.trim();
         if rest.starts_with('"') {
-            let remaining = &rest[1..];
-            if let Some(end) = remaining.rfind('"') {
-                return Some(remaining[..end].to_string());
-            }
+            return quoted_content(rest.strip_prefix('"')?);
         }
     }
     None
+}
+
+/// 返回以引号开头的内容中第一对引号之间的文本（字符边界安全）。
+///
+/// 入参为已被剥离前导引号的剩余串，此处定位闭合引号。找不到闭合引号时
+/// 返回剩余全部内容（兼容异常格式）。
+fn quoted_content(remaining: &str) -> Option<String> {
+    let end = remaining
+        .char_indices()
+        .find(|&(_, c)| c == '"')
+        .map(|(idx, _)| idx)
+        .unwrap_or(remaining.len());
+    Some(remaining.get(..end)?.to_string())
 }
 
 fn parse_item_block(block: &str) -> Option<KeychainItem> {

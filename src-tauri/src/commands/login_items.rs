@@ -88,10 +88,26 @@ pub fn list_login_items() -> Result<Vec<LoginItem>, String> {
     Ok(items)
 }
 
+/// 转义 AppleScript 双引号字符串字面量中的特殊字符
+fn apple_escape(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\r' => escaped.push_str("\\r"),
+            '\n' => escaped.push_str("\\n"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
+}
+
 #[tauri::command]
 pub fn add_login_item(path: String) -> Result<(), String> {
     log::info!("[login_items] 添加登录项: {}", path);
-    let escaped_path = path.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped_path = apple_escape(&path);
     let script = format!(
         r#"tell application "System Events" to make login item at end with properties {{path:"{}", hidden:false}}"#,
         escaped_path
@@ -104,7 +120,7 @@ pub fn add_login_item(path: String) -> Result<(), String> {
 #[tauri::command]
 pub fn remove_login_item(name: String) -> Result<(), String> {
     log::info!("[login_items] 移除登录项: {}", name);
-    let escaped_name = name.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped_name = apple_escape(&name);
     let script = format!(
         r#"tell application "System Events" to delete login item "{}""#,
         escaped_name
@@ -115,12 +131,8 @@ pub fn remove_login_item(name: String) -> Result<(), String> {
 }
 
 fn get_home_dir() -> String {
-    Command::new("sh")
-        .args(["-c", "echo $HOME"])
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
+    dirs::home_dir()
+        .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default()
 }
 

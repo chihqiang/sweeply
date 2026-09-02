@@ -2,19 +2,21 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { openKeychainAccess as openKeychain, listKeychains, searchKeychainItems, getKeychainPassword as getPwd, deleteKeychainItem as deleteItemSvc } from "@/services/keychainService";
 import { useAsyncTask } from "./useAsyncTask";
 import { cacheGet, cacheSet } from "@/utils/cache";
-import type { KeychainListResult, KeychainItem } from "@/types/keychain";
-import type { KeychainFile } from "@/types/keychain";
+import { TaskStatus } from "@/types/common";
+import type { KeychainListResult, KeychainItem, KeychainFile } from "@/types/keychain";
 
 const CACHE_KEY = "keychain:list";
 /** 钥匙串列表缓存 5 分钟 */
 const CACHE_TTL = 5 * 60_000;
+
+export type KeychainStatus = "idle" | "loading" | "loaded" | "error";
 
 export interface UseKeychainReturn {
   result: KeychainListResult | null;
   keychains: KeychainFile[];
   items: KeychainItem[];
   query: string;
-  status: string;
+  status: KeychainStatus;
   error: string | null;
   loading: boolean;
   openAccess: () => Promise<void>;
@@ -30,52 +32,37 @@ export function useKeychain(): UseKeychainReturn {
   const [items, setItems] = useState<KeychainItem[]>([]);
   const [query, setQuery] = useState("");
   const allItemsRef = useRef<KeychainItem[]>([]);
+  const mountedRef = useRef(true);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  // 统一的数据加载任务：拉取钥匙串列表并缓存，再拉取全部条目
   const loadTask = useAsyncTask(async () => {
     const res = await listKeychains();
     cacheSet(CACHE_KEY, res, CACHE_TTL);
-    setResult(res);
-    return res;
-  });
+    if (mountedRef.current) setResult(res);
 
-  // fetch all items from Rust (dumps keychain)
-  const fetchAllItems = useCallback(async () => {
     const all = await searchKeychainItems("");
     allItemsRef.current = all;
-    return all;
-  }, []);
-
-  const initialLoadTask = useAsyncTask(async () => {
-    const res = await listKeychains();
-    cacheSet(CACHE_KEY, res, CACHE_TTL);
-    setResult(res);
-    const all = await searchKeychainItems("");
-    allItemsRef.current = all;
-    setItems(all);
+    if (mountedRef.current) {
+      setItems(query === "" ? all : itemsFiltered(all, query));
+    }
     return res;
   });
 
   const { execute: loadExecute } = loadTask;
   const load = useCallback(async () => {
     await loadExecute();
-    const all = await fetchAllItems();
-    setItems(all);
-  }, [loadExecute, fetchAllItems]);
+  }, [loadExecute]);
 
   // search locally from cached items
   const search = useCallback(async (q: string) => {
     setQuery(q);
-    if (q === "") {
-      setItems(allItemsRef.current);
-      return;
-    }
-    const lower = q.toLowerCase();
-    const filtered = allItemsRef.current.filter(item =>
-      item.title.toLowerCase().includes(lower)
-      || item.account.toLowerCase().includes(lower)
-      || item.serverOrService.toLowerCase().includes(lower)
-    );
-    setItems(filtered);
+    const filtered = q === "" ? allItemsRef.current : itemsFiltered(allItemsRef.current, q);
+    if (mountedRef.current) setItems(filtered);
   }, []);
 
   const getPassword = useCallback(async (rawKind: string, service: string, account: string): Promise<string> => {
@@ -85,7 +72,9 @@ export function useKeychain(): UseKeychainReturn {
   const deleteItem = useCallback(async (id: string, rawKind: string, service: string, account: string) => {
     await deleteItemSvc(rawKind, service, account);
     allItemsRef.current = allItemsRef.current.filter(item => item.id !== id);
-    setItems(prev => prev.filter(item => item.id !== id));
+    if (mountedRef.current) {
+      setItems(prev => prev.filter(item => item.id !== id));
+    }
   }, []);
 
   const openAccess = useCallback(async () => {
@@ -97,22 +86,20 @@ export function useKeychain(): UseKeychainReturn {
   useEffect(() => {
     if (!initialLoadRef.current) {
       initialLoadRef.current = true;
-      void initialLoadTask.execute();
+      void loadExecute();
     }
-  }, [initialLoadTask.execute]);
+  }, [loadExecute]);
 
-  const status =
-    initialLoadTask.status === "processing"
+  const status: KeychainStatus =
+    loadTask.status === TaskStatus.Processing
       ? "loading"
-      : loadTask.status === "processing"
-        ? "loading"
-        : initialLoadTask.status === "error"
-          ? "error"
-          : initialLoadTask.status === "completed"
-            ? "loaded"
-            : "idle";
+      : loadTask.status === TaskStatus.Error
+        ? "error"
+        : loadTask.status === TaskStatus.Completed
+          ? "loaded"
+          : "idle";
 
-  const error = initialLoadTask.error || loadTask.error;
+  const error = loadTask.error;
 
   return {
     result,
@@ -121,11 +108,21 @@ export function useKeychain(): UseKeychainReturn {
     query,
     status,
     error,
-    loading: initialLoadTask.status === "processing" || loadTask.status === "processing",
+    loading: loadTask.status === TaskStatus.Processing,
     openAccess,
     load,
     search,
     getPassword,
     deleteItem,
   };
+}
+
+/** 按关键词过滤条目（本地过滤，复用后端相同的匹配规则） */
+function itemsFiltered(all: KeychainItem[], q: string): KeychainItem[] {
+  const lower = q.toLowerCase();
+  return all.filter(item =>
+    item.title.toLowerCase().includes(lower)
+    || item.account.toLowerCase().includes(lower)
+    || item.serverOrService.toLowerCase().includes(lower)
+  );
 }

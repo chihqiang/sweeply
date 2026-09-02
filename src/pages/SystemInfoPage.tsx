@@ -20,6 +20,10 @@ import { cacheGet, cacheSet } from "@/utils/cache";
 const CACHE_KEY = "systemInfo:data";
 /** 系统信息缓存 30 秒（硬件信息不常变，但 CPU/内存等需要刷新） */
 const CACHE_TTL = 30_000;
+/** 自动刷新最小间隔（毫秒）：防止定时器与手动刷新重叠、并发打满后端 */
+const AUTO_REFRESH_MIN_INTERVAL = 3_000;
+/** 自动刷新定时器周期（毫秒） */
+const AUTO_REFRESH_INTERVAL = 3_000;
 
 function formatUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
@@ -105,8 +109,17 @@ export default function SystemInfoPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasCacheRef = useRef(cached !== null);
+  const fetchingRef = useRef(false);
+  const lastFetchRef = useRef(0);
 
   const fetchInfo = useCallback(async () => {
+    // 节流：距上次请求不足最小间隔则跳过（避免定时器与手动刷新叠加）
+    const now = Date.now();
+    if (now - lastFetchRef.current < AUTO_REFRESH_MIN_INTERVAL) return;
+    // 防止并发重复请求
+    if (fetchingRef.current) return;
+    fetchingRef.current = true;
+    lastFetchRef.current = now;
     try {
       const data = await getSystemInfo();
       setInfo(data);
@@ -117,16 +130,17 @@ export default function SystemInfoPage() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      fetchingRef.current = false;
     }
   }, []);
 
   // 首次挂载：仅当无缓存时才请求；有缓存则直接展示，仅启动定时刷新
   useEffect(() => {
     if (!hasCacheRef.current) {
-      Promise.resolve().then(() => fetchInfo());
+      Promise.resolve().then(() => void fetchInfo());
     }
-    // 定时刷新（3 秒），保持实时性但不重新全量加载
-    const timer = setInterval(() => void fetchInfo(), 3000);
+    // 定时刷新，保持实时性（节流保护已内置，不会并发打满后端）
+    const timer = setInterval(() => void fetchInfo(), AUTO_REFRESH_INTERVAL);
     return () => clearInterval(timer);
   }, [fetchInfo]);
 
@@ -153,22 +167,22 @@ export default function SystemInfoPage() {
 
   return (
     <PageContainer>
-        <PageHeader
-          title="系统信息"
-          description="查看 Mac 硬件配置和系统运行状态"
-          badge={
-            <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400">
-              <Activity className="h-3 w-3 animate-pulse" />
-              实时
-            </span>
-          }
-          actions={
-            <Button variant="outline" size="sm" onClick={() => { setRefreshing(true); void fetchInfo(); }} disabled={refreshing} loading={refreshing}>
-              <RefreshCw className="h-3.5 w-3.5" />
-              {refreshing ? "刷新中" : "刷新"}
-            </Button>
-          }
-        />
+      <PageHeader
+        title="系统信息"
+        description="查看 Mac 硬件配置和系统运行状态"
+        badge={
+          <span className="flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-600 dark:bg-emerald-900/20 dark:text-emerald-400">
+            <Activity className="h-3 w-3 animate-pulse" />
+            实时
+          </span>
+        }
+        actions={
+          <Button variant="outline" size="sm" onClick={() => { setRefreshing(true); void fetchInfo(); }} disabled={refreshing} loading={refreshing}>
+            <RefreshCw className="h-3.5 w-3.5" />
+            {refreshing ? "刷新中" : "刷新"}
+          </Button>
+        }
+      />
 
       <div className="grid gap-4 sm:grid-cols-2">
         {/* 硬件信息 */}

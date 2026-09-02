@@ -310,6 +310,18 @@ export default function NetworkSpeedPage() {
 
 function DnsFlushButton() {
   const [status, setStatus] = useState<"idle" | "flushing" | "done" | "error">("idle");
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  useEffect(() => {
+    const timer = resetTimerRef.current;
+    return () => clearTimeout(timer);
+  }, []);
+
+  const scheduleReset = () => {
+    clearTimeout(resetTimerRef.current);
+    resetTimerRef.current = setTimeout(() => setStatus("idle"), 2000);
+  };
+
   return (
     <button
       onClick={async () => {
@@ -318,10 +330,10 @@ function DnsFlushButton() {
           const { flushDns } = await import("@/services/systemService");
           await flushDns();
           setStatus("done");
-          setTimeout(() => setStatus("idle"), 2000);
+          scheduleReset();
         } catch {
           setStatus("error");
-          setTimeout(() => setStatus("idle"), 2000);
+          scheduleReset();
         }
       }}
       disabled={status === "flushing"}

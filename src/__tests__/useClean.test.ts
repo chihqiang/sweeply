@@ -103,10 +103,10 @@ describe("useClean", () => {
     const { result } = renderHook(() => useClean());
 
     await act(async () => {
-      await result.current.executeCleanAction(["c1"], [100]);
+      await result.current.executeCleanAction(["c1"], [100], ["movetrash"]);
     });
 
-    expect(mockInvoke).toHaveBeenCalledWith("execute_clean", { selectedIds: ["c1"], sizes: [100] });
+    expect(mockInvoke).toHaveBeenCalledWith("execute_clean", { selectedIds: ["c1"], sizes: [100], methods: ["movetrash"] });
     expect(result.current.cleanResult).toEqual(cleanResult);
   });
 
@@ -214,7 +214,7 @@ describe("useClean", () => {
     let caught = false;
     await act(async () => {
       try {
-        await result.current.executeCleanAction(["c1"], [100]);
+        await result.current.executeCleanAction(["c1"], [100], ["movetrash"]);
       } catch {
         caught = true;
       }

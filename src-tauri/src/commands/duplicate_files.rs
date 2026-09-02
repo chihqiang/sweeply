@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::fs;
 use std::io::Read;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
 
@@ -15,6 +15,26 @@ use rayon::prelude::*;
 fn cancel_flag() -> &'static Arc<AtomicBool> {
     static FLAG: OnceLock<Arc<AtomicBool>> = OnceLock::new();
     FLAG.get_or_init(|| Arc::new(AtomicBool::new(false)))
+}
+
+/// 最近一次扫描返回的文件路径集合，删除命令据此校验路径来源（拒绝删除未扫描过的路径）
+fn scanned_file_paths() -> &'static Mutex<Option<HashSet<PathBuf>>> {
+    static REGISTRY: OnceLock<Mutex<Option<HashSet<PathBuf>>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(None))
+}
+
+fn remember_scanned_paths(paths: impl IntoIterator<Item = PathBuf>) {
+    if let Ok(mut guard) = scanned_file_paths().lock() {
+        *guard = Some(paths.into_iter().collect());
+    }
+}
+
+fn is_scanned_path(path: &Path) -> bool {
+    scanned_file_paths()
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|set| set.contains(path)))
+        .unwrap_or(false)
 }
 
 const EVENT_SCAN_PROGRESS: &str = "duplicate://scan-progress";
@@ -67,10 +87,11 @@ pub async fn scan_duplicates(
     paths: Vec<String>,
 ) -> Result<Vec<DuplicateGroup>, String> {
     log::info!("[duplicate] 收到扫描重复文件命令: paths={:?}", paths);
+    // 命令入口处重置取消标志，避免 stop 与 reset 的竞态丢失取消请求
+    cancel_flag().store(false, Ordering::SeqCst);
 
     tauri::async_runtime::spawn_blocking(move || {
         let scan_start = std::time::Instant::now();
-        cancel_flag().store(false, Ordering::SeqCst);
         let flag = cancel_flag();
 
         // 单次遍历：按大小分组
@@ -209,6 +230,9 @@ pub async fn scan_duplicates(
             current_path: String::new(),
         }).ok();
 
+        // 记录本次扫描返回的路径，供删除命令做来源校验
+        remember_scanned_paths(groups.iter().flat_map(|g| g.files.iter().map(|f| PathBuf::from(&f.path))));
+
         Ok(groups)
     })
     .await
@@ -230,7 +254,14 @@ pub fn delete_duplicate_files(paths: Vec<String>) -> Result<Vec<String>, String>
     log::info!("[duplicate] 收到删除重复文件命令: {} 个文件", paths.len());
     let mut failed: Vec<String> = Vec::new();
     for path in &paths {
-        match trash::delete(PathBuf::from(path)) {
+        let pb = PathBuf::from(path);
+        // 路径来源校验：仅允许删除最近一次扫描返回过的文件
+        if !is_scanned_path(&pb) {
+            log::error!("[duplicate] 拒绝删除未扫描过的路径: {}", path);
+            failed.push(format!("{} (路径不在扫描结果中)", path));
+            continue;
+        }
+        match trash::delete(pb) {
             Ok(_) => {
                 log::debug!("[duplicate] 删除成功: {}", path);
             }

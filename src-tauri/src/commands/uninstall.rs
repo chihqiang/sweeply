@@ -10,11 +10,33 @@
  * 所有扫描命令使用 spawn_blocking 避免阻塞 Tauri 主线程
  */
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 use walkdir::WalkDir;
 
 use crate::models::uninstall::{UninstallProgressPayload, *};
+
+/// 每个应用最近一次扫描返回的文件路径，卸载命令据此校验路径来源（拒绝删除未扫描过的路径）
+fn scanned_app_files() -> &'static Mutex<HashMap<String, HashSet<PathBuf>>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, HashSet<PathBuf>>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn remember_app_paths(app_id: &str, paths: impl IntoIterator<Item = PathBuf>) {
+    if let Ok(mut guard) = scanned_app_files().lock() {
+        guard.insert(app_id.to_string(), paths.into_iter().collect());
+    }
+}
+
+fn is_known_app_path(app_id: &str, path: &Path) -> bool {
+    scanned_app_files()
+        .lock()
+        .ok()
+        .and_then(|g| g.get(app_id).map(|set| set.contains(path)))
+        .unwrap_or(false)
+}
 
 /// PNG 编码：将 RGBA 原始像素编码为 PNG 字节流
 fn encode_rgba_to_png(data: &[u8], width: u32, height: u32) -> Result<Vec<u8>, String> {
@@ -136,7 +158,8 @@ fn extract_tiff_to_base64_png(tiff_path: &PathBuf) -> String {
 /// 事件名称常量
 const EVENT_UNINSTALL_PROGRESS: &str = "uninstall://progress";
 const EVENT_APP_FOUND: &str = "uninstall://app-found";
-const EVENT_APP_SCAN_FINISHED: &str = "uninstall://app-scan-finished";
+/// 应用扫描进度事件（每扫描完一个应用推送一次 scanned/total/is_finished）
+const EVENT_APP_SCAN_PROGRESS: &str = "uninstall://app-scan-progress";
 
 /// 扫描进度事件载荷（发射给前端）
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -309,7 +332,7 @@ pub async fn scan_installed_apps(app: AppHandle) -> Result<Vec<InstalledApp>, St
 
             // 发送扫描进度
             let _ = app_handle.emit(
-                EVENT_APP_SCAN_FINISHED,
+                EVENT_APP_SCAN_PROGRESS,
                 AppScanProgressPayload {
                     scanned: (idx + 1) as u64,
                     total,
@@ -496,6 +519,9 @@ pub async fn scan_app_files(
             scan_start.elapsed().as_secs_f64()
         );
 
+        // 记录本次扫描返回的文件路径，供卸载命令做来源校验
+        remember_app_paths(&id, file_groups.iter().flat_map(|g| g.files.iter().map(|f| PathBuf::from(&f.path))));
+
         Ok(InstalledApp {
             id,
             bundle_id: meta.bundle_id,
@@ -602,6 +628,21 @@ pub async fn uninstall_app(
             // 从 ID 中提取路径（格式为 file_{type}_{path}）
             if let Some(path_str) = file_id.splitn(3, '_').nth(2) {
                 let path = PathBuf::from(path_str);
+                // 路径来源校验：仅允许删除 scan_app_files 返回过的路径
+                if !is_known_app_path(&app_id_clone, &path) {
+                    log::error!("[uninstall] 拒绝卸载未扫描过的路径: {}", path.display());
+                    failed_file_count += 1;
+                    let _ = app_clone.emit(
+                        EVENT_UNINSTALL_PROGRESS,
+                        UninstallProgressPayload {
+                            app_id: app_id_clone.clone(),
+                            deleted_count: (idx + 1) as u64,
+                            total_count,
+                            is_finished: idx + 1 == total_count as usize,
+                        },
+                    );
+                    continue;
+                }
                 let size = match std::fs::metadata(&path) {
                     Ok(m) if m.is_dir() => calculate_app_size(&path),
                     Ok(m) => m.len(),

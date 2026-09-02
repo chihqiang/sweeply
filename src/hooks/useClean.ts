@@ -5,7 +5,7 @@ import {
   stopCleanScan,
   onCleanProgress,
 } from "@/services/cleanService";
-import type { CleanScanSummary, CleanResult, CleanResultItem, CleanCategory } from "@/types/clean";
+import type { CleanScanSummary, CleanResult, CleanResultItem, CleanCategory, CleanMethod } from "@/types/clean";
 import type { ProgressEvent } from "@/types/common";
 import { TaskStatus } from "@/types/common";
 import { useAsyncTask } from "./useAsyncTask";
@@ -20,7 +20,7 @@ export interface UseCleanReturn {
   scanProgress: ProgressEvent | null;
   error: string | null;
   startScan: () => Promise<void>;
-  executeCleanAction: (selectedIds: string[], sizes: number[]) => Promise<void>;
+  executeCleanAction: (selectedIds: string[], sizes: number[], methods: CleanMethod[]) => Promise<void>;
   stopScan: () => Promise<void>;
   reset: () => void;
   toggleItemSelection: (itemId: string) => void;
@@ -74,7 +74,9 @@ export function useClean(): UseCleanReturn {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      if (scanningRef.current) { stopCleanScan(); }
+      if (scanningRef.current) {
+        stopCleanScan().catch(() => { /* 组件卸载时的清理，忽略失败 */ });
+      }
     };
   }, []);
 
@@ -107,13 +109,13 @@ export function useClean(): UseCleanReturn {
     }
   });
 
-  const clean = useAsyncTask(async (selectedIds: string[], sizes: number[]) => {
+  const clean = useAsyncTask(async (selectedIds: string[], sizes: number[], methods: CleanMethod[]) => {
     setScanProgress(null);
     const unlisten = await onCleanProgress((event) => {
       if (mountedRef.current) setScanProgress(event);
     });
     try {
-      const result = await executeClean(selectedIds, sizes);
+      const result = await executeClean(selectedIds, sizes, methods);
       return result;
     } finally {
       unlisten();
@@ -129,8 +131,8 @@ export function useClean(): UseCleanReturn {
 
   const { execute: cleanExecute } = clean;
   const executeCleanAction = useCallback(
-    async (selectedIds: string[], sizes: number[]) => {
-      await cleanExecute(selectedIds, sizes);
+    async (selectedIds: string[], sizes: number[], methods: CleanMethod[]) => {
+      await cleanExecute(selectedIds, sizes, methods);
     },
     [cleanExecute],
   );

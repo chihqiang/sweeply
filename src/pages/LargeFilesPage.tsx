@@ -208,8 +208,12 @@ export default function LargeFilesPage() {
     });
   }, []);
 
-  const handleLocate = useCallback((path: string) => {
-    openFileLocation(path);
+  const handleLocate = useCallback(async (path: string) => {
+    try {
+      await openFileLocation(path);
+    } catch {
+      // 路径不存在或无权限时静默忽略
+    }
   }, []);
 
   // 搜索 + 排序 + 按扩展名分组

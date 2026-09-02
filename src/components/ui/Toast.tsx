@@ -1,7 +1,10 @@
-import { createContext, useContext, useState, useCallback, useRef, type ReactNode } from "react";
+import { createContext, useContext, useState, useCallback, useRef, useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { CheckCircle2, XCircle, Info, X } from "lucide-react";
 import { cn } from "@/utils/cn";
+
+/** Toast 自动关闭时长（毫秒） */
+const TOAST_DURATION_MS = 3500;
 
 export type ToastType = "success" | "error" | "info";
 
@@ -34,17 +37,39 @@ const STYLES: Record<ToastType, string> = {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const counterRef = useRef(0);
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
 
   const removeToast = useCallback((id: string) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
+    setToasts((prev) => {
+      const next = prev.filter((t) => t.id !== id);
+      // 仅当 toast 确实存在时移除定时器，避免重复清理
+      if (next.length !== prev.length) {
+        const timer = timersRef.current.get(id);
+        if (timer) {
+          clearTimeout(timer);
+          timersRef.current.delete(id);
+        }
+      }
+      return next;
+    });
   }, []);
 
   const addToast = useCallback((toast: Omit<Toast, "id">) => {
     const id = `toast-${++counterRef.current}`;
     setToasts((prev) => [...prev, { ...toast, id }]);
-    setTimeout(() => removeToast(id), 3500);
+    const timer = setTimeout(() => removeToast(id), TOAST_DURATION_MS);
+    timersRef.current.set(id, timer);
     return id;
   }, [removeToast]);
+
+  // 组件卸载时清理所有未完成的定时器
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      timers.forEach((t) => clearTimeout(t));
+      timers.clear();
+    };
+  }, []);
 
   return (
     <ToastContext.Provider value={{ toasts, addToast, removeToast }}>

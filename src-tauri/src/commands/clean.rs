@@ -8,12 +8,14 @@
 use tauri::AppHandle;
 
 use crate::clean::{CancelToken, CleanEngine, Cleaner, ProgressEmitter};
-use crate::models::clean::{CleanResult, CleanScanSummary};
+use crate::models::clean::{CleanMethod, CleanResult, CleanScanSummary};
 
 /// 扫描垃圾文件（异步，使用 spawn_blocking 避免阻塞主线程）
 #[tauri::command]
 pub async fn scan_clean_files(app: AppHandle) -> Result<CleanScanSummary, String> {
     log::info!("[clean] 收到扫描垃圾文件命令");
+    // 命令入口处重置取消标志，避免 stop 与 reset 的竞态丢失取消请求
+    CancelToken::global().reset();
 
     tauri::async_runtime::spawn_blocking(move || {
         let engine = CleanEngine::new();
@@ -28,22 +30,25 @@ pub async fn scan_clean_files(app: AppHandle) -> Result<CleanScanSummary, String
     })?
 }
 
-/// 执行垃圾清理（使用 trash crate 移至废纸篓或直接删除）
+/// 执行垃圾清理（根据每项的 CleanMethod 执行删除/截断）
 #[tauri::command]
 pub async fn execute_clean(
     app: AppHandle,
     selected_ids: Vec<String>,
     sizes: Vec<u64>,
+    methods: Vec<CleanMethod>,
 ) -> Result<CleanResult, String> {
-    if selected_ids.len() != sizes.len() {
+    if selected_ids.len() != sizes.len() || selected_ids.len() != methods.len() {
         return Err("参数长度不匹配".to_string());
     }
 
     log::info!("[clean] 收到清理命令, 选中 {} 项", selected_ids.len());
+    // 命令入口处重置取消标志，避免 stop 与 reset 的竞态丢失取消请求
+    CancelToken::global().reset();
 
     tauri::async_runtime::spawn_blocking(move || {
         let cleaner = Cleaner::new(app);
-        cleaner.execute(selected_ids, sizes)
+        cleaner.execute(selected_ids, sizes, methods)
     })
     .await
     .map_err(|e| {

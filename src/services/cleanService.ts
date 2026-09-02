@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { CleanScanSummary, CleanResult } from "@/types/clean";
+import type { CleanScanSummary, CleanResult, CleanMethod } from "@/types/clean";
 import type { ProgressEvent } from "@/types/common";
 
 const CMD_SCAN_CLEAN = "scan_clean_files";
@@ -15,8 +15,9 @@ export async function scanCleanFiles(): Promise<CleanScanSummary> {
 export async function executeClean(
   selectedIds: string[],
   sizes: number[],
+  methods: CleanMethod[],
 ): Promise<CleanResult> {
-  return invoke<CleanResult>(CMD_EXECUTE_CLEAN, { selectedIds, sizes });
+  return invoke<CleanResult>(CMD_EXECUTE_CLEAN, { selectedIds, sizes, methods });
 }
 
 export async function stopCleanScan(): Promise<void> {

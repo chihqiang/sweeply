@@ -122,9 +122,13 @@ export function useUninstall(): UseUninstallReturn {
     }
   }, [listExecute, appList.length]);
 
+  const scanningAppRef = useRef(0);
+
   const scanTask = useAsyncTask(async (appId: string) => {
+    const seq = ++scanningAppRef.current;
     const app = await scanAppFiles(appId, AppScanType.Uninstall);
-    if (mountedRef.current) setSelectedApp(app);
+    // 防止快速切换应用时旧请求结果覆盖新选择的应用
+    if (mountedRef.current && seq === scanningAppRef.current) setSelectedApp(app);
     return app;
   });
 

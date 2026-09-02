@@ -33,7 +33,7 @@ export default function KeychainPage() {
   }, [passwords, getPassword]);
 
   const handleCopyPassword = useCallback(async (pwd: string) => {
-    try { await navigator.clipboard.writeText(pwd); } catch {}
+    try { await navigator.clipboard.writeText(pwd); } catch { /* 复制失败时静默忽略 */ }
   }, []);
 
   const handleDeleteConfirm = useCallback(async () => {
@@ -42,7 +42,7 @@ export default function KeychainPage() {
     try {
       await deleteItem(deleteTarget.id, deleteTarget.rawKind, deleteTarget.service, deleteTarget.account);
       setPasswords(prev => { const n = { ...prev }; delete n[deleteTarget.id]; return n; });
-    } catch {}
+    } catch { /* 删除失败时保留状态，由对话框关闭处理 */ }
     setDeleting(false);
     setDeleteTarget(null);
   }, [deleteTarget, deleteItem]);
