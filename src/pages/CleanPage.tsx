@@ -587,9 +587,6 @@ export default function CleanPage() {
     };
   }, [scanSummary, debouncedQuery, sortBy]);
 
-  // 清理成功后自动重新扫描
-  const prevCleanResultRef = useRef(cleanResult);
-
   const handleScan = useCallback(async () => {
     try {
       setExpanded(new Set());
@@ -609,17 +606,6 @@ export default function CleanPage() {
       addToast({ type: "error", message: "扫描失败" });
     }
   }, [startScan, addToast]);
-
-  useEffect(() => {
-    if (cleanResult && cleanResult !== prevCleanResultRef.current) {
-      prevCleanResultRef.current = cleanResult;
-      const timer = setTimeout(() => {
-        void handleScan();
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
-    prevCleanResultRef.current = cleanResult;
-  }, [cleanResult, handleScan]);
 
   const handleClean = useCallback(async () => {
     setConfirmOpen(false);
