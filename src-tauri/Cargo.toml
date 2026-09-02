@@ -63,6 +63,8 @@ listeners = "0.6"
 libc = "0.2"
 # macOS Security.framework 原生绑定（钥匙串管理，替代 security 命令行）
 security-framework = "3"
+# SQLite 读取（启动项/后台项 btm 数据库，替代 sqlite3 命令行）
+rusqlite = { version = "0.34", features = ["bundled"] }
 
 [profile.release]
 panic = "abort"

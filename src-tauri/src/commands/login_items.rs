@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
+use walkdir::WalkDir;
 
 use super::uninstall::extract_app_icon;
 
@@ -138,22 +139,21 @@ fn get_home_dir() -> String {
 
 /// 批量扫描 /Applications + ~/Applications，构建 小写名→路径 映射
 fn build_app_name_map() -> HashMap<String, PathBuf> {
-    let home = get_home_dir();
-    let cmd = format!(
-        "find /Applications {}/Applications -maxdepth 3 -name '*.app' 2>/dev/null",
-        home
-    );
-    let output = Command::new("sh")
-        .args(["-c", &cmd])
-        .output()
-        .ok();
+    let mut roots = vec![PathBuf::from("/Applications")];
+    if let Some(home) = dirs::home_dir() {
+        roots.push(home.join("Applications"));
+    }
     let mut map = HashMap::new();
-    if let Some(output) = output {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            let p = PathBuf::from(line.trim());
-            if let Some(name) = p.file_stem().and_then(|n| n.to_str()) {
-                map.insert(name.to_lowercase(), p);
+    for root in roots {
+        if !root.is_dir() {
+            continue;
+        }
+        for entry in WalkDir::new(&root).max_depth(3).into_iter().filter_map(|e| e.ok()) {
+            let p = entry.path();
+            if p.is_dir() && p.extension() == Some(std::ffi::OsStr::new("app")) {
+                if let Some(name) = p.file_stem().and_then(|n| n.to_str()) {
+                    map.insert(name.to_lowercase(), p.to_path_buf());
+                }
             }
         }
     }
@@ -223,40 +223,38 @@ pub fn list_background_items() -> Result<Vec<BackgroundItem>, String> {
 
     let db_exists = std::path::Path::new(&db_path).exists();
     if db_exists {
-        let sqlite_output = Command::new("sqlite3")
-            .args([
-                "-separator",
-                "|",
-                &db_path,
-                "SELECT ZTEAMID, ZBUNDLEID, ZDISPLAYNAME FROM ZBACKGROUNDITEM;",
-            ])
-            .output()
-            .ok();
-
-        if let Some(output) = sqlite_output {
-            if output.status.success() {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let items: Vec<BackgroundItem> = stdout
-                    .lines()
-                    .filter(|l| !l.is_empty())
-                    .filter_map(|line| {
-                        let parts: Vec<&str> = line.splitn(3, '|').collect();
-                        let bundle_id = parts.get(1).filter(|s| !s.is_empty());
-                        let label = parts.get(2).or(parts.get(1)).unwrap_or(&"unknown").to_string();
-                        if label.is_empty() || label == "unknown" {
-                            return None;
+        let flags = rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        if let Ok(conn) = rusqlite::Connection::open_with_flags(&db_path, flags) {
+            let query = "SELECT ZTEAMID, ZBUNDLEID, ZDISPLAYNAME FROM ZBACKGROUNDITEM;";
+            if let Ok(mut stmt) = conn.prepare(query) {
+                let rows = stmt.query_map([], |r| {
+                    Ok((
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
+                });
+                let mut items = Vec::new();
+                if let Ok(iter) = rows {
+                    for row in iter.flatten() {
+                        let (bundle_id, display) = row;
+                        let label = display
+                            .filter(|s| !s.is_empty())
+                            .or_else(|| bundle_id.clone().filter(|s| !s.is_empty()))
+                            .unwrap_or_else(|| "unknown".to_string());
+                        if label == "unknown" {
+                            continue;
                         }
-                        let icon_path = extract_icon_for_label(&label, bundle_id.copied(), &app_map);
-                        Some(BackgroundItem {
+                        let icon_path = extract_icon_for_label(&label, bundle_id.as_deref(), &app_map);
+                        items.push(BackgroundItem {
                             label,
                             pid: None,
                             status: "允许在后台".to_string(),
                             icon_path,
-                        })
-                    })
-                    .collect();
+                        });
+                    }
+                }
                 if !items.is_empty() {
-                    log::info!("[login_items] 从 sqlite3 获取到 {} 个后台项", items.len());
+                    log::info!("[login_items] 从 rusqlite 读取到 {} 个后台项", items.len());
                     return Ok(items);
                 }
             }
@@ -264,27 +262,32 @@ pub fn list_background_items() -> Result<Vec<BackgroundItem>, String> {
     }
 
     // 回退：用 launchctl list 列出用户级非 Apple 服务
-    let launchctl_output = Command::new("sh")
-        .args(["-c", "launchctl list 2>/dev/null | awk 'NR>1 && $3 !~ /^com\\.apple\\./ && $3 !~ /^application\\.com\\.apple\\./ && $3 != \"\" {print $1, $2, $3}'"])
+    let launchctl_output = Command::new("launchctl")
+        .arg("list")
         .output()
         .map_err(|e| format!("执行 launchctl 失败: {}", e))?;
 
     let stdout = String::from_utf8_lossy(&launchctl_output.stdout);
     let items: Vec<BackgroundItem> = stdout
         .lines()
-        .filter(|l| !l.is_empty())
         .filter_map(|line| {
-            let parts: Vec<&str> = line.splitn(3, ' ').collect();
-            if parts.len() < 3 {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() < 3 || parts[0] == "PID" {
                 return None;
             }
-            let pid_str = parts.get(1).unwrap_or(&"-").trim();
+            let label = parts[2].trim().to_string();
+            if label.is_empty()
+                || label.starts_with("com.apple.")
+                || label.starts_with("application.com.apple.")
+            {
+                return None;
+            }
+            let pid_str = parts[0].trim();
             let pid = if pid_str == "-" {
                 None
             } else {
                 pid_str.parse::<u32>().ok()
             };
-            let label = parts[2].to_string();
             let status = if pid.is_some() { "运行中" } else { "未运行" };
             let icon_path = extract_icon_for_label(&label, None, &app_map);
             Some(BackgroundItem {

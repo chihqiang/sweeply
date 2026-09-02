@@ -40,31 +40,99 @@ pub struct BatteryInfo {
     pub is_charging: bool,
 }
 
-fn run_cmd(args: &[&str]) -> String {
-    Command::new(args[0])
-        .args(&args[1..])
-        .output()
-        .ok()
-        .and_then(|o| {
-            if o.status.success() {
-                String::from_utf8(o.stdout).ok()
-            } else {
-                None
-            }
-        })
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default()
+fn sysctl_string(name: &str) -> Option<String> {
+    let cname = std::ffi::CString::new(name).ok()?;
+    let mut len: libc::size_t = 0;
+    if unsafe {
+        libc::sysctlbyname(cname.as_ptr(), std::ptr::null_mut(), &mut len, std::ptr::null_mut(), 0)
+    } != 0
+    {
+        return None;
+    }
+    let mut buf = vec![0u8; len];
+    if unsafe {
+        libc::sysctlbyname(
+            cname.as_ptr(),
+            buf.as_mut_ptr().cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
+        return None;
+    }
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    Some(String::from_utf8_lossy(&buf[..end]).trim().to_string())
+}
+
+fn sysctl_int(name: &str) -> Option<libc::c_int> {
+    let cname = std::ffi::CString::new(name).ok()?;
+    let mut val: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::size_t;
+    if unsafe {
+        libc::sysctlbyname(
+            cname.as_ptr(),
+            (&mut val as *mut libc::c_int).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    } == 0
+    {
+        Some(val)
+    } else {
+        None
+    }
+}
+
+fn cstr_arr_to_string(arr: &[libc::c_char]) -> String {
+    let bytes: Vec<u8> = arr
+        .iter()
+        .take_while(|&&c| c != 0)
+        .map(|&c| c as u8)
+        .collect();
+    String::from_utf8_lossy(&bytes).to_string()
+}
+
+fn uname_field<F: FnOnce(&libc::utsname) -> String>(f: F) -> String {
+    let mut uts = std::mem::MaybeUninit::<libc::utsname>::uninit();
+    if unsafe { libc::uname(uts.as_mut_ptr()) } == 0 {
+        let uts = unsafe { uts.assume_init() };
+        f(&uts)
+    } else {
+        String::new()
+    }
+}
+
+/// 读取 SystemVersion.plist（替代 sw_vers），返回 (产品版本, 构建版本)
+fn system_version_plist() -> (String, String) {
+    match plist::Value::from_file("/System/Library/CoreServices/SystemVersion.plist") {
+        Ok(plist::Value::Dictionary(map)) => {
+            let version = map
+                .get("ProductVersion")
+                .and_then(plist::Value::as_string)
+                .unwrap_or("")
+                .to_string();
+            let build = map
+                .get("ProductBuildVersion")
+                .and_then(plist::Value::as_string)
+                .unwrap_or("")
+                .to_string();
+            (version, build)
+        }
+        _ => (String::new(), String::new()),
+    }
 }
 
 fn get_model_identifier() -> String {
-    run_cmd(&["sysctl", "-n", "hw.model"])
+    sysctl_string("hw.model").unwrap_or_default()
 }
 
 fn get_chip_info() -> String {
-    let brand = run_cmd(&["sysctl", "-n", "machdep.cpu.brand_string"]);
+    let brand = sysctl_string("machdep.cpu.brand_string").unwrap_or_default();
     if brand.is_empty() {
-        let shell = run_cmd(&["sh", "-c", "sysctl -n sysctl.proc_translated 2>/dev/null"]);
-        if shell.trim() == "1" {
+        if sysctl_int("sysctl.proc_translated") == Some(1) {
             "Apple Silicon (Rosetta)".to_string()
         } else {
             "Unknown".to_string()
@@ -75,7 +143,7 @@ fn get_chip_info() -> String {
 }
 
 fn get_os_version() -> String {
-    let version = run_cmd(&["sw_vers", "-productVersion"]);
+    let (version, _) = system_version_plist();
     let name = os_version_name(&version);
     if name.is_empty() {
         version
@@ -85,15 +153,15 @@ fn get_os_version() -> String {
 }
 
 fn get_os_build() -> String {
-    run_cmd(&["sw_vers", "-buildVersion"])
+    system_version_plist().1
 }
 
 fn get_kernel_version() -> String {
-    run_cmd(&["uname", "-r"])
+    uname_field(|u| cstr_arr_to_string(&u.release))
 }
 
 fn get_host_name() -> String {
-    run_cmd(&["uname", "-n"])
+    sysinfo::System::host_name().unwrap_or_else(|| uname_field(|u| cstr_arr_to_string(&u.nodename)))
 }
 
 fn os_version_name(version: &str) -> String {
@@ -251,12 +319,8 @@ pub fn get_system_info() -> Result<SystemInfo, String> {
     let total_memory = sys.total_memory();
     let used_memory = sys.used_memory();
 
-    let physical_cores: u32 = run_cmd(&["sysctl", "-n", "hw.physicalcpu"])
-        .parse()
-        .unwrap_or(0);
-    let logical_cores: u32 = run_cmd(&["sysctl", "-n", "hw.logicalcpu"])
-        .parse()
-        .unwrap_or(0);
+    let physical_cores = sys.physical_core_count().unwrap_or(0) as u32;
+    let logical_cores = sys.cpus().len() as u32;
 
     let disks = Disks::new_with_refreshed_list();
     let volumes: Vec<VolumeInfo> = disks
