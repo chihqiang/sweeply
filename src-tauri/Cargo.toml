@@ -61,6 +61,8 @@ rayon = "1"
 listeners = "0.6"
 # 进程信号（结束占用进程）
 libc = "0.2"
+# macOS Security.framework 原生绑定（钥匙串管理，替代 security 命令行）
+security-framework = "3"
 
 [profile.release]
 panic = "abort"

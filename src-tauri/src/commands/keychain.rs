@@ -1,195 +1,33 @@
+use std::path::Path;
 use std::process::Command;
+
+use security_framework::item::{CloudSync, ItemClass, ItemSearchOptions, Limit, SearchResult};
+use security_framework::os::macos::keychain::{SecKeychain, SecPreferencesDomain};
+use security_framework::os::macos::passwords::{
+    find_internet_password, SecAuthenticationType, SecProtocolType,
+};
 
 use crate::models::keychain::{KeychainFile, KeychainItem, KeychainListResult};
 
-fn run_security(args: &[&str]) -> Result<String, String> {
-    log::debug!("[keychain] 执行 security 命令: security {}", args.join(" "));
-    let output = Command::new("security")
-        .args(args)
-        .output()
-        .map_err(|e| {
-            log::error!("[keychain] 执行 security 命令失败: {}", e);
-            format!("执行 security 命令失败: {}", e)
-        })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("error:") || stderr.contains("SecKeychainSearch") {
-            log::warn!("[keychain] security 命令返回错误: {}", stderr.trim());
-            return Err(stderr.trim().to_string());
-        }
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+fn err_msg(msg: &str, e: impl std::fmt::Display) -> String {
+    format!("{}: {}", msg, e)
 }
 
-/// 从形如 `"..."=value` 或 `0x... "value"` 的片段中提取带引号的值。
-///
-/// 通过 `char_indices` 定位引号，避免直接字节切片导致的多字节 UTF-8 字符边界 panic。
-/// 从形如 `"..."=value` 或 `0x... "value"` 的片段中提取带引号的值。
-///
-/// 通过 `find`/`get` 在字符边界上切片，避免直接字节切片导致的多字节 UTF-8 panic。
-fn extract_quoted_value(s: &str) -> Option<String> {
-    let eq_pos = s.find('=')?;
-    let after_eq = s[eq_pos + 1..].trim();
-    if after_eq.starts_with('"') {
-        // 去掉开头的引号后找闭合引号
-        return quoted_content(after_eq.strip_prefix('"')?);
-    }
-    if after_eq.starts_with("0x") {
-        let rest = after_eq.trim_start_matches(|c: char| c.is_alphanumeric() || c == 'x');
-        let rest = rest.trim();
-        if rest.starts_with('"') {
-            return quoted_content(rest.strip_prefix('"')?);
-        }
-    }
-    None
-}
-
-/// 返回以引号开头的内容中第一对引号之间的文本（字符边界安全）。
-///
-/// 入参为已被剥离前导引号的剩余串，此处定位闭合引号。找不到闭合引号时
-/// 返回剩余全部内容（兼容异常格式）。
-fn quoted_content(remaining: &str) -> Option<String> {
-    let end = remaining
-        .char_indices()
-        .find(|&(_, c)| c == '"')
-        .map(|(idx, _)| idx)
-        .unwrap_or(remaining.len());
-    Some(remaining.get(..end)?.to_string())
-}
-
-fn parse_item_block(block: &str) -> Option<KeychainItem> {
-    let mut title = String::new();
-    let mut account = String::new();
-    let mut server_or_service = String::new();
-    let mut kind = String::new();
-    let mut modified = String::new();
-    let mut raw_data = String::new();
-    let mut hex_label: Option<String> = None;
-    let mut hex_key_name: Option<String> = None;
-
-    for line in block.lines() {
-        raw_data.push_str(line);
-        raw_data.push('\n');
-        let trimmed = line.trim();
-
-        if let Some(class_val) = trimmed.strip_prefix("class: ") {
-            kind = match class_val.trim_matches('"') {
-                "0x0000000F" => "genp".to_string(),
-                "0x00000010" => "inet".to_string(),
-                s if s.starts_with("0x") => s.to_string(),
-                s => s.to_string(),
-            };
-            continue;
-        }
-
-        // human-readable attributes: "acct"<blob>="value"
-        if trimmed.starts_with('"') {
-            if let Some(attr_str) = trimmed.strip_prefix('"') {
-                let parts: Vec<&str> = attr_str.splitn(2, '"').collect();
-                if parts.len() >= 2 {
-                    let key = parts[0];
-                    let rest = parts[1];
-                    if let Some(value) = extract_quoted_value(rest) {
-                        match key {
-                            "acct" => account = value,
-                            "svce" | "srvr" => server_or_service = value,
-                            "labl" => title = value,
-                            "desc" if title.is_empty() && account.is_empty() => title = value,
-                            _ => {}
-                        }
-                    }
-                    if key == "mdat" || key == "cdat" {
-                        if let Some(ts) = extract_quoted_value(rest) {
-                            modified = ts;
-                        }
-                    }
-                }
-            }
-            continue;
-        }
-
-        // hex attributes: 0x00000007 <blob>="value"
-        if trimmed.starts_with("0x") && trimmed.contains('=') {
-            let hex_tag_str = trimmed.split(' ').next().unwrap_or("");
-            if let Some(value) = extract_quoted_value(trimmed) {
-                if let Ok(tag) = u32::from_str_radix(hex_tag_str.trim_start_matches("0x"), 16) {
-                    match tag {
-                        7 => { hex_label = Some(value); }
-                        1 => { hex_key_name = Some(value); }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-
-    // title priority: human-readable label/svce > hex label (tag 7) > hex key name (tag 1) > human-readable svce > account
-    if title.is_empty() {
-        if let Some(ref label) = hex_label {
-            title = label.clone();
-        }
-    }
-    if title.is_empty() {
-        if let Some(ref key_name) = hex_key_name {
-            if !key_name.starts_with('<') {
-                title = key_name.clone();
-            }
-        }
-    }
-    if title.is_empty() && !server_or_service.is_empty() {
-        title = server_or_service.clone();
-    }
-    if title.is_empty() && !account.is_empty() {
-        title = account.clone();
-    }
-
-    let id = format!("{}-{}", kind, title);
-
-    let raw_kind = kind.clone();
-    let kind_display = match kind.as_str() {
-        "genp" => "密码",
-        "inet" => "网络密码",
-        "cert" => "证书",
-        "keys" => "密钥",
-        _ => &kind,
-    };
-
-    Some(KeychainItem {
-        id,
-        title,
-        kind: kind_display.to_string(),
-        raw_kind,
-        account,
-        server_or_service,
-        modified_date: modified,
-        raw_data,
+/// 按钥匙串域构造展示条目（不再依赖 `security list-keychains` 命令）
+fn domain_keychain(domain: SecPreferencesDomain, path: &str, is_login: bool, is_system: bool) -> Option<KeychainFile> {
+    SecKeychain::default_for_domain(domain).ok()?;
+    let path_str = path.to_string();
+    let name = Path::new(&path_str)
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| path_str.clone());
+    Some(KeychainFile {
+        path: path_str,
+        name,
+        is_login,
+        is_system,
+        status: if is_login { "unlocked".to_string() } else { "unknown".to_string() },
     })
-}
-
-fn parse_items(output: &str) -> Vec<KeychainItem> {
-    let mut items = Vec::new();
-    let mut current_block = String::new();
-
-    for line in output.lines() {
-        if line.starts_with("keychain: ") && !current_block.is_empty() {
-            if let Some(item) = parse_item_block(&current_block) {
-                items.push(item);
-            }
-            current_block.clear();
-        }
-        current_block.push_str(line);
-        current_block.push('\n');
-    }
-
-    if !current_block.is_empty() {
-        if let Some(item) = parse_item_block(&current_block) {
-            items.push(item);
-        }
-    }
-
-    items
 }
 
 #[tauri::command]
@@ -208,57 +46,107 @@ pub fn open_keychain_access() -> Result<(), String> {
 #[tauri::command]
 pub fn list_keychains() -> Result<Vec<KeychainFile>, String> {
     log::info!("[keychain] 收到列出钥匙串命令");
-    let output = run_security(&["list-keychains"])?;
-
-    let keychains: Vec<KeychainFile> = output
-        .lines()
-        .filter_map(|line| {
-            let path = line.trim().trim_matches('"').to_string();
-            if path.is_empty() {
-                return None;
-            }
-            let name = std::path::Path::new(&path)
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.clone());
-
-            let is_login = name.contains("login");
-            let is_system = name.contains("System") || name.contains("system");
-
-            let status = if is_login { "unlocked" } else { "unknown" };
-
-            Some(KeychainFile {
-                path,
-                name,
-                is_login,
-                is_system,
-                status: status.to_string(),
-            })
-        })
-        .collect();
+    let mut keychains = Vec::new();
+    if let Some(home) = dirs::home_dir() {
+        let login_path = home.join("Library/Keychains/login.keychain-db");
+        if let Some(kc) = domain_keychain(
+            SecPreferencesDomain::User,
+            login_path.to_string_lossy().as_ref(),
+            true,
+            false,
+        ) {
+            keychains.push(kc);
+        }
+    }
+    if let Some(kc) = domain_keychain(
+        SecPreferencesDomain::System,
+        "/Library/Keychains/System.keychain",
+        false,
+        true,
+    ) {
+        keychains.push(kc);
+    }
 
     log::info!("[keychain] 列出钥匙串完成: {} 个", keychains.len());
     Ok(keychains)
 }
 
-fn search_all_items() -> Vec<KeychainItem> {
-    let keychains = match list_keychains() {
-        Ok(kc) => kc,
-        Err(_) => return Vec::new(),
-    };
+/// 基于 Security.framework 枚举指定类别的钥匙串条目（替代 `security dump-keychain`）
+fn search_class(class: ItemClass) -> Vec<SearchResult> {
+    let mut opts = ItemSearchOptions::new();
+    opts.class(class)
+        .limit(Limit::All)
+        .load_attributes(true)
+        .cloud_sync(CloudSync::MatchSyncAny);
+    opts.search().unwrap_or_default()
+}
 
-    let mut all_items: Vec<KeychainItem> = Vec::new();
+/// 将单个条目的属性字典转换为统一展示结构
+fn attrs_to_item(result: &SearchResult, raw_kind: &str, kind_display: &str) -> Option<KeychainItem> {
+    let map = result.simplify_dict()?;
 
-    for kc in &keychains {
-        if let Ok(output) = run_security(&["dump-keychain", &kc.path]) {
-            let items = parse_items(&output);
-            all_items.extend(items);
+    let account = map.get("acct").cloned().unwrap_or_default();
+    let server_or_service = map
+        .get("svce")
+        .or_else(|| map.get("srvr"))
+        .cloned()
+        .unwrap_or_default();
+    let label = map.get("labl").cloned().unwrap_or_default();
+    let modified = map
+        .get("mdat")
+        .or_else(|| map.get("cdat"))
+        .cloned()
+        .unwrap_or_default();
+
+    let mut title = label;
+    if title.is_empty() {
+        title = server_or_service.clone();
+    }
+    if title.is_empty() {
+        title = account.clone();
+    }
+    if title.is_empty() || title.starts_with('<') {
+        return None;
+    }
+
+    let id = format!("{}-{}", raw_kind, title);
+    let mut raw_data = format!("class: {} ({})\n", raw_kind, kind_display);
+    for key in ["svce", "srvr", "acct", "labl", "mdat"] {
+        if let Some(value) = map.get(key) {
+            raw_data.push_str(&format!("\"{}\"=\"{}\"\n", key, value));
         }
     }
 
-    all_items.into_iter().filter(|item| {
-        !item.title.is_empty() && !item.title.starts_with('<')
-    }).collect()
+    Some(KeychainItem {
+        id,
+        title,
+        kind: kind_display.to_string(),
+        raw_kind: raw_kind.to_string(),
+        account,
+        server_or_service,
+        modified_date: modified,
+        raw_data,
+    })
+}
+
+fn search_all_items() -> Vec<KeychainItem> {
+    #[rustfmt::skip]
+    let classes = [
+        (ItemClass::generic_password(), "genp", "密码"),
+        (ItemClass::internet_password(), "inet", "网络密码"),
+        (ItemClass::certificate(), "cert", "证书"),
+        (ItemClass::key(), "keys", "密钥"),
+    ];
+
+    let mut all_items = Vec::new();
+    for (class, raw_kind, kind_display) in classes {
+        for result in search_class(class) {
+            if let Some(item) = attrs_to_item(&result, raw_kind, kind_display) {
+                all_items.push(item);
+            }
+        }
+    }
+    all_items
 }
 
 #[tauri::command]
@@ -287,11 +175,14 @@ pub fn search_keychain_items(query: String) -> Result<Vec<KeychainItem>, String>
     let results: Vec<KeychainItem> = if q.is_empty() {
         all_items
     } else {
-        all_items.into_iter().filter(|item| {
-            item.title.to_lowercase().contains(&q)
-                || item.account.to_lowercase().contains(&q)
-                || item.server_or_service.to_lowercase().contains(&q)
-        }).collect()
+        all_items
+            .into_iter()
+            .filter(|item| {
+                item.title.to_lowercase().contains(&q)
+                    || item.account.to_lowercase().contains(&q)
+                    || item.server_or_service.to_lowercase().contains(&q)
+            })
+            .collect()
     };
 
     log::info!("[keychain] 搜索完成: 匹配 {} 个条目", results.len());
@@ -299,26 +190,57 @@ pub fn search_keychain_items(query: String) -> Result<Vec<KeychainItem>, String>
 }
 
 #[tauri::command]
-pub fn get_keychain_password(raw_kind: String, service: String, account: String) -> Result<String, String> {
-    log::info!("[keychain] 获取密码: kind={} service={} account={}", raw_kind, service, account);
+pub fn get_keychain_password(
+    raw_kind: String,
+    service: String,
+    account: String,
+) -> Result<String, String> {
+    log::info!(
+        "[keychain] 获取密码: kind={} service={} account={}",
+        raw_kind,
+        service,
+        account
+    );
 
-    let mut args: Vec<String> = match raw_kind.as_str() {
-        "genp" => vec!["find-generic-password".into(), "-w".into()],
-        "inet" => vec!["find-internet-password".into(), "-w".into()],
+    let password_bytes: Vec<u8> = match raw_kind.as_str() {
+        "genp" => {
+            let mut opts = ItemSearchOptions::new();
+            opts.class(ItemClass::generic_password())
+                .service(&service)
+                .account(&account)
+                .limit(1)
+                .load_data(true)
+                .cloud_sync(CloudSync::MatchSyncAny);
+            let results = opts.search().map_err(|e| err_msg("搜索钥匙串条目失败", e))?;
+            let mut found = None;
+            for result in results {
+                if let SearchResult::Data(bytes) = result {
+                    found = Some(bytes);
+                    break;
+                }
+            }
+            found.ok_or_else(|| "无法获取密码或密码为空".to_string())?
+        }
+        "inet" => {
+            let (pw, _item) = find_internet_password(
+                None,
+                &service,
+                None,
+                &account,
+                "",
+                None,
+                SecProtocolType::Any,
+                SecAuthenticationType::Any,
+            )
+            .map_err(|e| err_msg("获取网络密码失败", e))?;
+            pw.as_ref().to_vec()
+        }
         _ => return Err(format!("不支持的钥匙串条目类型: {}", raw_kind)),
     };
-    match raw_kind.as_str() {
-        "genp" => { if !service.is_empty() { args.push("-l".into()); args.push(service.clone()); } }
-        "inet" => { if !service.is_empty() { args.push("-s".into()); args.push(service.clone()); } }
-        _ => {}
-    }
-    if !account.is_empty() { args.push("-a".into()); args.push(account.clone()); }
 
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let password = run_security(&refs)?;
-    let password = password.trim().to_string();
+    let password = String::from_utf8_lossy(&password_bytes).to_string();
     if password.is_empty() {
-        return Err("无法获取密码".to_string());
+        return Err("无法获取密码或密码为空".to_string());
     }
 
     log::info!("[keychain] 获取密码成功: {} 字符", password.len());
@@ -326,25 +248,43 @@ pub fn get_keychain_password(raw_kind: String, service: String, account: String)
 }
 
 #[tauri::command]
-pub fn delete_keychain_item(raw_kind: String, service: String, account: String) -> Result<(), String> {
-    log::info!("[keychain] 删除条目: kind={} service={} account={}", raw_kind, service, account);
+pub fn delete_keychain_item(
+    raw_kind: String,
+    service: String,
+    account: String,
+) -> Result<(), String> {
+    log::info!(
+        "[keychain] 删除条目: kind={} service={} account={}",
+        raw_kind,
+        service,
+        account
+    );
 
-    let mut args: Vec<String> = match raw_kind.as_str() {
-        "genp" => vec!["delete-generic-password".into()],
-        "inet" => vec!["delete-internet-password".into()],
-        _ => return Err(format!("不支持的钥匙串条目类型: {}", raw_kind)),
-    };
     match raw_kind.as_str() {
-        "genp" => { if !service.is_empty() { args.push("-l".into()); args.push(service.clone()); } }
-        "inet" => { if !service.is_empty() { args.push("-s".into()); args.push(service.clone()); } }
-        _ => {}
+        "genp" => {
+            let mut opts = ItemSearchOptions::new();
+            opts.class(ItemClass::generic_password())
+                .service(&service)
+                .account(&account);
+            opts.delete().map_err(|e| err_msg("删除条目失败", e))?;
+        }
+        "inet" => {
+            let (_pw, item) = find_internet_password(
+                None,
+                &service,
+                None,
+                &account,
+                "",
+                None,
+                SecProtocolType::Any,
+                SecAuthenticationType::Any,
+            )
+            .map_err(|e| err_msg("查找网络密码条目失败", e))?;
+            item.delete();
+        }
+        _ => return Err(format!("不支持的钥匙串条目类型: {}", raw_kind)),
     }
-    if !account.is_empty() { args.push("-a".into()); args.push(account.clone()); }
-
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run_security(&refs)?;
 
     log::info!("[keychain] 删除条目成功");
     Ok(())
 }
-
