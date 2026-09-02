@@ -57,6 +57,10 @@ png = "0.17"
 sha2 = "0.10"
 # 并行迭代（磁盘扫描、文件遍历性能优化）
 rayon = "1"
+# 本地监听端口枚举（跨平台，macOS 走底层 libc API，不调用系统命令）
+listeners = "0.6"
+# 进程信号（结束占用进程）
+libc = "0.2"
 
 [profile.release]
 panic = "abort"

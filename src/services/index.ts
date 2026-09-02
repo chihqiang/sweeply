@@ -6,3 +6,4 @@ export * from "./duplicateFileService";
 export * from "./largeFileService";
 export * from "./loginItemService";
 export * from "./systemService";
+export * from "./portService";

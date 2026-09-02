@@ -5,6 +5,8 @@ export const ROUTE_PATHS = {
   UNINSTALL: "/uninstall",
   /** 网络测速 */
   NETWORK_SPEED: "/network-speed",
+  /** 网络端口 */
+  PORTS: "/ports",
   /** 钥匙串管理 */
   KEYCHAIN: "/keychain",
   /** 系统信息 */

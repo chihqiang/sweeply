@@ -20,6 +20,7 @@ const SystemInfoPage = lazy(() => import("@/pages/SystemInfoPage"));
 const LoginItemsPage = lazy(() => import("@/pages/LoginItemsPage"));
 const DuplicateFilesPage = lazy(() => import("@/pages/DuplicateFilesPage"));
 const LargeFilesPage = lazy(() => import("@/pages/LargeFilesPage"));
+const PortsPage = lazy(() => import("@/pages/PortsPage"));
 
 /** Suspense fallback — 路由切换时即时展示 */
 function RouteLoading() {
@@ -64,6 +65,10 @@ export const routes: RouteObject[] = [
         element: <Suspense fallback={<RouteLoading />}><NetworkSpeedPage /></Suspense>,
       },
       {
+        path: ROUTE_PATHS.PORTS,
+        element: <Suspense fallback={<RouteLoading />}><PortsPage /></Suspense>,
+      },
+      {
         path: ROUTE_PATHS.KEYCHAIN,
         element: <Suspense fallback={<RouteLoading />}><KeychainPage /></Suspense>,
       },
@@ -98,6 +103,7 @@ const ROUTE_TITLES: Record<string, string> = {
   [ROUTE_PATHS.CLEAN]: "垃圾清理",
   [ROUTE_PATHS.UNINSTALL]: "应用卸载",
   [ROUTE_PATHS.NETWORK_SPEED]: "网络测速",
+  [ROUTE_PATHS.PORTS]: "网络端口",
   [ROUTE_PATHS.KEYCHAIN]: "钥匙串管理",
   [ROUTE_PATHS.SYSTEM_INFO]: "系统信息",
   [ROUTE_PATHS.LOGIN_ITEMS]: "启动项管理",

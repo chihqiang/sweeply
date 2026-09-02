@@ -14,6 +14,7 @@ use commands::system::{get_system_info, flush_dns, check_permissions, open_syste
 use commands::login_items::{list_login_items, add_login_item, remove_login_item, list_background_items};
 use commands::duplicate_files::{scan_duplicates, stop_duplicate_scan, delete_duplicate_files};
 use commands::large_files::{scan_large_files, stop_large_file_scan, delete_large_files, open_file_location};
+use commands::ports::{list_listening_ports, kill_process};
 
 /// 初始化日志（使用 env_logger，通过 RUST_LOG 环境变量控制级别）
 fn init_logger() {
@@ -90,6 +91,9 @@ pub fn run() {
             stop_large_file_scan,
             delete_large_files,
             open_file_location,
+            // 网络端口
+            list_listening_ports,
+            kill_process,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
