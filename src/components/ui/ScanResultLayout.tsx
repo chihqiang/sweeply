@@ -6,7 +6,7 @@ import { PageContainer, ErrorAlert } from "./PageContainer";
 /**
  * 扫描类页面 — 结果状态通用布局
  *
- * 用于垃圾清理、大文件查找、重复文件查找、磁盘分析等页面的扫描结果展示。
+ * 用于垃圾清理、大文件查找、重复文件查找等页面的扫描结果展示。
  * 提供统一的标题栏、错误提示、横幅、统计栏、工具栏、列表区域和底部操作栏。
  */
 export interface ScanResultLayoutProps {

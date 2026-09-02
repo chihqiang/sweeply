@@ -6,7 +6,6 @@ import {
   Monitor,
   LogIn,
   Copy,
-  HardDrive,
   FileSearch,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -56,12 +55,6 @@ export const NAV_GROUPS: NavGroup[] = [
         label: "重复文件",
         icon: Copy,
         desc: "查找并删除重复文件",
-      },
-      {
-        path: ROUTE_PATHS.DISK_USAGE,
-        label: "磁盘分析",
-        icon: HardDrive,
-        desc: "分析磁盘空间占用",
       },
     ],
   },

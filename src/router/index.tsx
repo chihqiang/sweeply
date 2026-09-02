@@ -19,7 +19,6 @@ const KeychainPage = lazy(() => import("@/pages/KeychainPage"));
 const SystemInfoPage = lazy(() => import("@/pages/SystemInfoPage"));
 const LoginItemsPage = lazy(() => import("@/pages/LoginItemsPage"));
 const DuplicateFilesPage = lazy(() => import("@/pages/DuplicateFilesPage"));
-const DiskUsagePage = lazy(() => import("@/pages/DiskUsagePage"));
 const LargeFilesPage = lazy(() => import("@/pages/LargeFilesPage"));
 
 /** Suspense fallback — 路由切换时即时展示 */
@@ -81,10 +80,6 @@ export const routes: RouteObject[] = [
         element: <Suspense fallback={<RouteLoading />}><DuplicateFilesPage /></Suspense>,
       },
       {
-        path: ROUTE_PATHS.DISK_USAGE,
-        element: <Suspense fallback={<RouteLoading />}><DiskUsagePage /></Suspense>,
-      },
-      {
         path: ROUTE_PATHS.LARGE_FILES,
         element: <Suspense fallback={<RouteLoading />}><LargeFilesPage /></Suspense>,
       },
@@ -107,7 +102,6 @@ const ROUTE_TITLES: Record<string, string> = {
   [ROUTE_PATHS.SYSTEM_INFO]: "系统信息",
   [ROUTE_PATHS.LOGIN_ITEMS]: "启动项管理",
   [ROUTE_PATHS.DUPLICATE_FILES]: "重复文件查找",
-  [ROUTE_PATHS.DISK_USAGE]: "磁盘空间分析",
   [ROUTE_PATHS.LARGE_FILES]: "大文件查找",
 };
 

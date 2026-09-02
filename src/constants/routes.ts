@@ -13,8 +13,6 @@ export const ROUTE_PATHS = {
   LOGIN_ITEMS: "/login-items",
   /** 重复文件查找 */
   DUPLICATE_FILES: "/duplicate-files",
-  /** 磁盘空间分析 */
-  DISK_USAGE: "/disk-usage",
   /** 大文件查找 */
   LARGE_FILES: "/large-files",
   /** 默认首页（重定向到垃圾清理） */

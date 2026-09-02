@@ -13,7 +13,6 @@ use commands::keychain::{open_keychain_access, list_keychains, list_keychain_ite
 use commands::system::{get_system_info, flush_dns, check_permissions, open_system_settings};
 use commands::login_items::{list_login_items, add_login_item, remove_login_item, list_background_items};
 use commands::duplicate_files::{scan_duplicates, stop_duplicate_scan, delete_duplicate_files};
-use commands::disk_usage::{scan_disk_usage, scan_disk_usage_detail, stop_disk_scan};
 use commands::large_files::{scan_large_files, stop_large_file_scan, delete_large_files, open_file_location};
 
 /// 初始化日志（使用 env_logger，通过 RUST_LOG 环境变量控制级别）
@@ -86,10 +85,6 @@ pub fn run() {
             scan_duplicates,
             stop_duplicate_scan,
             delete_duplicate_files,
-            // 磁盘空间分析
-            scan_disk_usage,
-            scan_disk_usage_detail,
-            stop_disk_scan,
             // 大文件查找
             scan_large_files,
             stop_large_file_scan,
